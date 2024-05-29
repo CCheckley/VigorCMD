@@ -8,12 +8,15 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
 
-#define GENERAL_ERROR 666
-#define WINDOW_CREATE_ERROR 901
-#define INSTANCE_CREATE_ERROR 902
-#define SURFACE_CREATE_ERROR 903
+#define GENERAL_ERROR           666
+#define WINDOW_CREATE_ERROR     901
+#define INSTANCE_CREATE_ERROR   902
+#define SURFACE_CREATE_ERROR    903
 
 #define VULKAN_VALIDATION_LAYERS_ENABLED true
+
+constexpr uint32_t WINDOW_WIDTH  = 640;
+constexpr uint32_t WINDOW_HEIGHT = 480;
 
 static constexpr const char* const KHRONOS_VALIDATION_LAYER_NAME = "VK_LAYER_KHRONOS_validation";
 
@@ -57,24 +60,26 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL vulkanValidationLayerCallback(
     return VK_FALSE;
 }
 
-int main(int argc, char* argv[]) {
-	//SDL_Init(SDL_INIT_EVERYTHING);
-    
-	SDL_Window* window = nullptr;
+void WindowInit(SDL_Window** window)
+{
+    SDL_Init(SDL_INIT_EVERYTHING);
 
-	int initError = 0;
-	initError = SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
-	if (initError < 0) {
-		std::cout << "VIDEO INIT ERROR: " << SDL_GetError() << std::endl;
-		return initError;
-	}
+    int initError = 0;
+    initError = SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+    if (initError < 0) {
+        std::cout << "VIDEO INIT ERROR: " << SDL_GetError() << std::endl;
+        throw initError;
+    }
 
-	window = SDL_CreateWindow("VigorCMD", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 640, 480, SDL_WINDOW_SHOWN | SDL_WINDOW_VULKAN);
-	if (window == nullptr) {
-		std::cout << "WINDOW CREATION ERROR: " << SDL_GetError() << std::endl;
-		return WINDOW_CREATE_ERROR;
-	}
+    *window = SDL_CreateWindow("VigorCMD", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN | SDL_WINDOW_VULKAN);
+    if (window == nullptr) {
+        std::cout << "WINDOW CREATION ERROR: " << SDL_GetError() << std::endl;
+        throw WINDOW_CREATE_ERROR;
+    }
+}
 
+void SetupVulkanInstance(SDL_Window* window, SDL_vulkanInstance* instance)
+{
     VkApplicationInfo appInfo{}; // !! YOU NEED TO DEFAULT INIT LIKE THIS !!
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.apiVersion = VK_API_VERSION_1_3;
@@ -83,13 +88,12 @@ int main(int argc, char* argv[]) {
     appInfo.pEngineName = "test-engine";
     appInfo.engineVersion = VK_MAKE_API_VERSION(1, 0, 0, 0);
 
-    unsigned int count = 0;
-    SDL_Vulkan_GetInstanceExtensions(window, &count, NULL);
-    std::vector<const char*> extentionNames;
-    extentionNames.resize(count);
-    SDL_Vulkan_GetInstanceExtensions(window, &count, extentionNames.data());
+    unsigned int extensionCount = 0;
+    SDL_Vulkan_GetInstanceExtensions(window, &extensionCount, NULL);
+    std::vector<const char*> extentionNames(extensionCount);
+    SDL_Vulkan_GetInstanceExtensions(window, &extensionCount, extentionNames.data());
 
-    for (unsigned int i = 0; i < count; i++)
+    for (unsigned int i = 0; i < extensionCount; i++)
     {
         printf("%u: %s\n", i, extentionNames[i]);
     }
@@ -101,20 +105,20 @@ int main(int argc, char* argv[]) {
     if (VULKAN_VALIDATION_LAYERS_ENABLED) {
         extentionNames.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         extentionNames.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
-        
+
         // This is required by the 'VK_KHR_portability_subset' device extension used for validation on MacOS.
         extentionNames.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
         reqLayerNames.push_back(KHRONOS_VALIDATION_LAYER_NAME);
     }
 
     // Fill out this struct with details about the instance we want, required extensions, API layers and so on:
-    VkInstanceCreateInfo createInfo{}; // !! YOU NEED TO DEFAULT INIT LIKE THIS !!
-    createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    createInfo.pApplicationInfo = &appInfo;
-    createInfo.ppEnabledExtensionNames = extentionNames.data();
-    createInfo.enabledExtensionCount = (uint32_t)extentionNames.size();
-    createInfo.ppEnabledLayerNames = reqLayerNames.data();
-    createInfo.enabledLayerCount = (uint32_t) reqLayerNames.size();
+    VkInstanceCreateInfo instInfo{}; // !! YOU NEED TO DEFAULT INIT LIKE THIS !!
+    instInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    instInfo.pApplicationInfo = &appInfo;
+    instInfo.ppEnabledExtensionNames = extentionNames.data();
+    instInfo.enabledExtensionCount = (uint32_t)extentionNames.size();
+    instInfo.ppEnabledLayerNames = reqLayerNames.data();
+    instInfo.enabledLayerCount = (uint32_t)reqLayerNames.size();
 
     VkDebugReportCallbackCreateInfoEXT dbgReportCallbackCInfo{}; // !! YOU NEED TO DEFAULT INIT LIKE THIS !!
     dbgReportCallbackCInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
@@ -125,32 +129,150 @@ int main(int argc, char* argv[]) {
         VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT |
         VK_DEBUG_REPORT_ERROR_BIT_EXT |
         VK_DEBUG_REPORT_DEBUG_BIT_EXT
-    );
+        );
     if (VULKAN_VALIDATION_LAYERS_ENABLED) {
         // This line here enables validation layer reporting for instance creation and destruction.
         // Normally you must setup your own reporting object but that requires an instance and thus won't be used for instance create/destroy.
         // If we point this list to a debug report 'create info' then the API will do reporting for instance create/destroy accordingly.
-        
-        createInfo.pNext = &dbgReportCallbackCInfo;
+
+        instInfo.pNext = &dbgReportCallbackCInfo;
     }
 
-    SDL_vulkanInstance instance = VK_NULL_HANDLE;
-    if (0 > vkCreateInstance(&createInfo, NULL, &instance))
+    if (0 > vkCreateInstance(&instInfo, NULL, instance))
     {
         printf("failed to create instance\n");
+        throw GENERAL_ERROR;
     }
+}
+
+void SetupVulkan(SDL_Window* window, SDL_vulkanInstance instance, VkDevice device)
+{
+    SetupVulkanInstance(window, &instance);
+
+    // TODO - https://vulkan-tutorial.com/Drawing_a_triangle/Setup/Physical_devices_and_queue_families
+
+    // -- SETUP PHYSICAL DEVICES --
+    uint32_t physicalDeviceCount = 0;
+    vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, nullptr);
+    std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
+    vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices.data());
+
+    VkPhysicalDevice physicalDevice = physicalDevices[0];
+
+    // -- SETUP QUEUE FAMILIES --
+    uint32_t queueFamilyCount;
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies.data());
 
     SDL_vulkanSurface surface = VK_NULL_HANDLE;
     if (SDL_FALSE == SDL_Vulkan_CreateSurface(window, instance, &surface))
     {
         printf("failed to create surface, SDL Error: %s", SDL_GetError());
+        throw GENERAL_ERROR;
     }
 
-	SDL_UpdateWindowSurface(window);
-	SDL_Delay(1000);
+    // -- SETUP GRAPHICS/PRESENT QUEUE --
+    uint32_t graphicsQueueIndex = UINT32_MAX;
+    uint32_t presentQueueIndex = UINT32_MAX;
+    VkBool32 support;
+    uint32_t i = 0;
+    for (VkQueueFamilyProperties queueFamily : queueFamilies)
+    {
+        if (graphicsQueueIndex == UINT32_MAX
+            && queueFamily.queueCount > 0
+            && queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT
+            )
+        {
+            graphicsQueueIndex = i;
+        }
+        if (presentQueueIndex == UINT32_MAX)
+        {
+            vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, i, surface, &support);
+            if (support)
+            {
+                presentQueueIndex = i;
+            }
+        }
 
-	SDL_DestroyWindow(window);
-	SDL_Quit();
+        ++i;
+    }
+
+    float queuePriority = 1.0f;
+    VkDeviceQueueCreateInfo queueInfo = {
+        VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, // sType
+        nullptr,                                    // pNext
+        0,                                          // flags
+        graphicsQueueIndex,                         // graphicsQueueIndex
+        1,                                          // queueCount
+        &queuePriority,                             // pQueuePriorities
+    };
+
+    // -- SETUP VK DEVICE --
+    VkPhysicalDeviceFeatures deviceFeatures = {};
+    const char* deviceExtensionNames[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    VkDeviceCreateInfo createInfo = {
+        VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,   // sType
+        nullptr,                                // pNext
+        0,                                      // flags
+        1,                                      // queueCreateInfoCount
+        &queueInfo,                             // pQueueCreateInfos
+        0,                                      // enabledLayerCount
+        nullptr,                                // ppEnabledLayerNames
+        1,                                      // enabledExtensionCount
+        deviceExtensionNames,                   // ppEnabledExtensionNames
+        &deviceFeatures,                        // pEnabledFeatures
+    };
+    vkCreateDevice(physicalDevice, &createInfo, nullptr, &device);
+
+    VkQueue graphicsQueue;
+    vkGetDeviceQueue(device, graphicsQueueIndex, 0, &graphicsQueue);
+
+    VkQueue presentQueue;
+    vkGetDeviceQueue(device, presentQueueIndex, 0, &presentQueue);
+
+    SDL_Log("Initialized with errors: %s", SDL_GetError());
+}
+
+void MainLoop()
+{
+    bool running = true;
+    while (running)
+    {
+        SDL_Event windowEvent;
+        while (SDL_PollEvent(&windowEvent))
+        {
+            if (windowEvent.type == SDL_QUIT)
+            {
+                running = false;
+                break;
+            }
+        }
+    }
+}
+
+void Cleanup(SDL_Window* window, SDL_vulkanInstance instance, VkDevice device)
+{
+    vkDestroyDevice(device, nullptr);
+    vkDestroyInstance(instance, nullptr);
+    SDL_DestroyWindow(window);
+    SDL_Vulkan_UnloadLibrary();
+    SDL_Quit();
+
+    SDL_Log("Cleaned up with errors: %s", SDL_GetError());
+}
+
+int main(int argc, char* argv[]) {    
+    SDL_Window** window = (SDL_Window**)malloc(sizeof(SDL_Window*)); // Need the doube ptr malloc to init within a func
+    WindowInit(window);
+
+    SDL_vulkanInstance instance = VK_NULL_HANDLE;
+    VkDevice device = nullptr;
+    SetupVulkan(*window, instance, device);
+
+    MainLoop();
+
+    Cleanup(*window, instance, device);
 
 	return 0;
 }
