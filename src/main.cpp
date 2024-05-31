@@ -1,6 +1,7 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <optional>
 
 #include <SDL.h>
 #include <SDL_vulkan.h>
@@ -145,65 +146,131 @@ void SetupVulkanInstance(SDL_Window* window, SDL_vulkanInstance* instance)
     }
 }
 
-void SetupVulkan(SDL_Window* window, SDL_vulkanInstance instance, VkDevice device)
+bool IsDeviceSuitable(VkPhysicalDevice physicalDevice)
 {
-    SetupVulkanInstance(window, &instance);
+    VkPhysicalDeviceProperties physicalDeviceProperties;
+    vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
 
-    // TODO - https://vulkan-tutorial.com/Drawing_a_triangle/Setup/Physical_devices_and_queue_families
+    VkPhysicalDeviceFeatures physicalDeviceFeatures;
+    vkGetPhysicalDeviceFeatures(physicalDevice, &physicalDeviceFeatures);
 
-    // -- SETUP PHYSICAL DEVICES --
+    // Force dedicated GPU requirement and Geo-shader requirement
+    return physicalDeviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && physicalDeviceFeatures.geometryShader;
+}
+
+VkPhysicalDevice PickPhysicalDevice(SDL_vulkanInstance* instance)
+{
     uint32_t physicalDeviceCount = 0;
-    vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, nullptr);
+    vkEnumeratePhysicalDevices(*instance, &physicalDeviceCount, nullptr);
+
+    if (physicalDeviceCount == 0)
+    {
+        throw std::runtime_error("CANNOT FIND PHYSICAL DEVICE WITH VK SUPPORT");
+    }
+
     std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
-    vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices.data());
+    vkEnumeratePhysicalDevices(*instance, &physicalDeviceCount, physicalDevices.data());
 
-    VkPhysicalDevice physicalDevice = physicalDevices[0];
+    VkPhysicalDevice pickedPhysicalDevice = VK_NULL_HANDLE;
+    for (const auto& physicalDevice : physicalDevices)
+    {
+        if (!IsDeviceSuitable(physicalDevice))
+        {
+            continue;
+        }
 
-    // -- SETUP QUEUE FAMILIES --
+        pickedPhysicalDevice = physicalDevice;
+        break;
+    }
+
+    if (pickedPhysicalDevice == VK_NULL_HANDLE)
+    {
+        throw std::runtime_error("CANNOT FIND SUITABLE PHYSICAL DEVICE");
+    }
+
+    return pickedPhysicalDevice;
+}
+
+struct QueueFamilyIndicies
+{
+    std::optional<uint32_t> presentFamily;
+
+    std::optional<uint32_t> computeFamily;
+    std::optional<uint32_t> graphicsFamily;
+
+    bool IsComplete()
+    {
+        return presentFamily.has_value() && computeFamily.has_value() && graphicsFamily.has_value();
+    }
+};
+
+QueueFamilyIndicies FindQueueFamilies(VkPhysicalDevice physicalDevice, SDL_vulkanSurface* surface)
+{
+    QueueFamilyIndicies indicies;
+
     uint32_t queueFamilyCount;
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
+
     std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies.data());
 
-    SDL_vulkanSurface surface = VK_NULL_HANDLE;
-    if (SDL_FALSE == SDL_Vulkan_CreateSurface(window, instance, &surface))
-    {
-        printf("failed to create surface, SDL Error: %s", SDL_GetError());
-        throw GENERAL_ERROR;
-    }
-
-    // -- SETUP GRAPHICS/PRESENT QUEUE --
-    uint32_t graphicsQueueIndex = UINT32_MAX;
-    uint32_t presentQueueIndex = UINT32_MAX;
-    VkBool32 support;
     uint32_t i = 0;
     for (VkQueueFamilyProperties queueFamily : queueFamilies)
     {
-        if (graphicsQueueIndex == UINT32_MAX
-            && queueFamily.queueCount > 0
-            && queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT
-            )
+        if (indicies.IsComplete())
         {
-            graphicsQueueIndex = i;
+            break;
         }
-        if (presentQueueIndex == UINT32_MAX)
+
+        // Graphics
+        if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT)
         {
-            vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, i, surface, &support);
+            indicies.graphicsFamily = i;
+        }
+
+        // Compute
+        VkBool32 support;
+        if (queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT)
+        {
+            indicies.computeFamily = i;
+        }
+
+        if (!indicies.presentFamily.has_value())
+        {
+            vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, i, *surface, &support);
             if (support)
             {
-                presentQueueIndex = i;
+                indicies.presentFamily = i;
             }
         }
 
         ++i;
     }
 
+    return indicies;
+}
+
+void SetupVulkan(SDL_Window** window, SDL_vulkanInstance instance, VkDevice device)
+{
+    SetupVulkanInstance(*window, &instance);
+
+    VkPhysicalDevice physicalDevice = PickPhysicalDevice(&instance);
+
+    SDL_vulkanSurface surface = VK_NULL_HANDLE;
+    if (SDL_FALSE == SDL_Vulkan_CreateSurface(*window, instance, &surface))
+    {
+        printf("failed to create surface, SDL Error: %s", SDL_GetError());
+        throw GENERAL_ERROR;
+    }
+
+    QueueFamilyIndicies queueFamilyIndicies = FindQueueFamilies(physicalDevice, &surface);
+
     float queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueInfo = {
         VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, // sType
         nullptr,                                    // pNext
         0,                                          // flags
-        graphicsQueueIndex,                         // graphicsQueueIndex
+        queueFamilyIndicies.graphicsFamily.value(), // graphicsQueueIndex
         1,                                          // queueCount
         &queuePriority,                             // pQueuePriorities
     };
@@ -225,11 +292,11 @@ void SetupVulkan(SDL_Window* window, SDL_vulkanInstance instance, VkDevice devic
     };
     vkCreateDevice(physicalDevice, &createInfo, nullptr, &device);
 
-    VkQueue graphicsQueue;
-    vkGetDeviceQueue(device, graphicsQueueIndex, 0, &graphicsQueue);
-
     VkQueue presentQueue;
-    vkGetDeviceQueue(device, presentQueueIndex, 0, &presentQueue);
+    vkGetDeviceQueue(device, queueFamilyIndicies.presentFamily.value(), 0, &presentQueue);
+
+    VkQueue graphicsQueue;
+    vkGetDeviceQueue(device, queueFamilyIndicies.graphicsFamily.value(), 0, &graphicsQueue);
 
     SDL_Log("Initialized with errors: %s", SDL_GetError());
 }
@@ -251,11 +318,11 @@ void MainLoop()
     }
 }
 
-void Cleanup(SDL_Window* window, SDL_vulkanInstance instance, VkDevice device)
+void Cleanup(SDL_Window** window, SDL_vulkanInstance instance, VkDevice device)
 {
     vkDestroyDevice(device, nullptr);
     vkDestroyInstance(instance, nullptr);
-    SDL_DestroyWindow(window);
+    SDL_DestroyWindow(*window);
     SDL_Vulkan_UnloadLibrary();
     SDL_Quit();
 
@@ -268,11 +335,11 @@ int main(int argc, char* argv[]) {
 
     SDL_vulkanInstance instance = VK_NULL_HANDLE;
     VkDevice device = nullptr;
-    SetupVulkan(*window, instance, device);
+    SetupVulkan(window, instance, device);
 
     MainLoop();
 
-    Cleanup(*window, instance, device);
+    Cleanup(window, instance, device);
 
 	return 0;
 }
