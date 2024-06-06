@@ -321,6 +321,11 @@ namespace Vigor
 
         void Shutdown()
         {
+            for (auto imageView : swapChainImageViews)
+            {
+                vkDestroyImageView(logicalDevice, imageView, nullptr);
+            }
+
             vkDestroySwapchainKHR(logicalDevice, swapChain, nullptr);
             vkDestroySurfaceKHR(instance, surface, nullptr);
             vkDestroyDevice(logicalDevice, nullptr);
@@ -607,6 +612,51 @@ namespace Vigor
             swapChainExtent = extent;
         }
 
+        void InitImageViews()
+        {
+            swapChainImageViews.resize(swapChainImages.size());
+
+            for (size_t i = 0; i < swapChainImages.size(); i++)
+            {
+                VkImageViewCreateInfo imageViewCreateInfo{};
+                imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                imageViewCreateInfo.image = swapChainImages[i];
+                imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; // Can be 1d,2d,3d, arrays of the former, etc.
+                imageViewCreateInfo.format = swapChainImageFormat;
+
+                /*
+                * The components field allows you to swizzle the color channels around.
+                * For example, you can map all of the channels to the red channel for a monochrome texture.
+                * You can also map constant values of 0 and 1 to a channel. In our case we'll stick to the default mapping.
+                */
+                imageViewCreateInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+                imageViewCreateInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+                imageViewCreateInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+                imageViewCreateInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+
+                /*
+                * The subresourceRange field describes what the image's purpose is and which part of the image should be accessed.
+                * Our images will be used as color targets without any mipmapping levels or multiple layers.
+                */
+                imageViewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
+                imageViewCreateInfo.subresourceRange.levelCount = 1;
+                imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
+                imageViewCreateInfo.subresourceRange.layerCount = 1;
+                /* - NOTE -
+                * If you were working on a stereographic 3D application, then you would create a swap chain with multiple layers.
+                * You could then create multiple image views for each image representing the views for the left and right eyes by accessing different layers.
+                */
+
+                VkResult createImageViewRes = vkCreateImageView(logicalDevice, &imageViewCreateInfo, nullptr, &swapChainImageViews[i]);
+                if (createImageViewRes != VK_SUCCESS)
+                {
+                    std::string errorMsg = std::format("Failed to create image view Error: {}, Index: {}\n\n", (int)createImageViewRes, i);
+                    throw std::runtime_error(errorMsg);
+                }
+            }
+        }
+
     private:
 
         uint16_t WindowWidth = 640;
@@ -617,17 +667,19 @@ namespace Vigor
         VkDevice logicalDevice = VK_NULL_HANDLE;
         VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 
+        std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+
         SDL_vulkanSurface surface = VK_NULL_HANDLE;
         SDL_vulkanInstance instance = VK_NULL_HANDLE;
 
         QueueFamilyIndicies queueFamilyIndicies;
 
         VkSwapchainKHR swapChain;
-        std::vector<VkImage> swapChainImages;
         VkFormat swapChainImageFormat;
         VkExtent2D swapChainExtent;
 
-        std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+        std::vector<VkImage> swapChainImages;
+        std::vector<VkImageView> swapChainImageViews;
 
 #if VULKAN_VALIDATION_LAYERS_ENABLED
         std::vector<const char*> validationLayerNames;
