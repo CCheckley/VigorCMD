@@ -5,6 +5,7 @@
 #include <format>
 #include <set>
 #include <algorithm>
+#include <fstream>
 
 #include <SDL.h>
 #include <SDL_vulkan.h>
@@ -225,6 +226,49 @@ namespace Vigor
                 }
 
                 ++i;
+            }
+        }
+
+        static VkShaderModule CreateShaderModule(const std::vector<char>& code, VkDevice logicalDevice)
+        {
+            VkShaderModuleCreateInfo shaderModuleCreateInfo{};
+            shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            shaderModuleCreateInfo.codeSize = code.size();
+            shaderModuleCreateInfo.pCode = reinterpret_cast<const uint32_t*>(code.data()); // TODO - get rid of this reinterpret_cast when possible, its BAD
+
+            VkShaderModule shaderModule;
+
+            VkResult createShaderModuleRes = vkCreateShaderModule(logicalDevice, &shaderModuleCreateInfo, nullptr, &shaderModule);
+            if (createShaderModuleRes != VK_SUCCESS)
+            {
+                std::string errorMsg = std::format("Failed to create shader module Error: {}\n\n", (int)createShaderModuleRes);
+            }
+
+            return shaderModule;
+        }
+
+        namespace File
+        {
+            static std::vector<char> Read(const std::string& filename)
+            {
+                std::ifstream file(filename, std::ios::ate | std::ios::binary);
+
+                if (!file.is_open())
+                {
+                    throw std::runtime_error(("Failed to open file! File Path: %s\n\n", filename));
+                }
+
+                // get size
+                size_t fileSize = (size_t)file.tellg();
+                std::vector<char> buffer(fileSize);
+
+                // seek to file start and read all bytes
+                file.seekg(0);
+                file.read(buffer.data(), fileSize);
+
+                // close and return data
+                file.close();
+                return buffer;
             }
         }
     }
@@ -655,6 +699,33 @@ namespace Vigor
                     throw std::runtime_error(errorMsg);
                 }
             }
+        }
+
+        void InitGraphicsPipeline()
+        {
+            auto VertexShaderCode = Vigor::Utilities::File::Read("../shaders/TriVS.spv");
+            auto PixelShaderCode = Vigor::Utilities::File::Read("../shaders/TriPS.spv");
+
+            VkShaderModule vertexShaderModule = Vigor::Utilities::CreateShaderModule(VertexShaderCode, logicalDevice);
+            VkShaderModule pixelShaderModule = Vigor::Utilities::CreateShaderModule(PixelShaderCode, logicalDevice);
+
+            // TODO
+            VkPipelineShaderStageCreateInfo createInfoVertexShaderStage{};
+            createInfoVertexShaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            createInfoVertexShaderStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+            createInfoVertexShaderStage.module = vertexShaderModule;
+            createInfoVertexShaderStage.pName = "main";
+
+            VkPipelineShaderStageCreateInfo createInfoPixelShaderStage{};
+            createInfoPixelShaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            createInfoPixelShaderStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+            createInfoPixelShaderStage.module = pixelShaderModule;
+            createInfoPixelShaderStage.pName = "main";
+
+            VkPipelineShaderStageCreateInfo shaderStages[] = { createInfoVertexShaderStage, createInfoPixelShaderStage };
+
+            vkDestroyShaderModule(logicalDevice, vertexShaderModule, nullptr);
+            vkDestroyShaderModule(logicalDevice, pixelShaderModule, nullptr);
         }
 
     private:

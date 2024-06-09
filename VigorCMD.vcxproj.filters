@@ -19,4 +19,13 @@
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="shaders\vertex\TriVS.hlsl" />
+    <FxCompile Include="shaders\pixel\TriPS.hlsl" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="shaders\shadercompile.bat">
+      <Filter>Source Files</Filter>
+    </None>
+  </ItemGroup>
 </Project>
