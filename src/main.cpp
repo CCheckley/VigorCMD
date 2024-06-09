@@ -41,7 +41,7 @@ namespace Vigor
 
     struct SwapChainSupportDetails
     {
-        VkSurfaceCapabilitiesKHR capabilities;
+        VkSurfaceCapabilitiesKHR capabilities{};
         std::vector<VkSurfaceFormatKHR> formats;
         std::vector<VkPresentModeKHR> presentModes;
 
@@ -196,7 +196,7 @@ namespace Vigor
             vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies.data());
 
             uint32_t i = 0;
-            for (VkQueueFamilyProperties queueFamily : queueFamilies)
+            for (const VkQueueFamilyProperties& queueFamily : queueFamilies)
             {
                 if (queueFamilyIndicies.IsComplete())
                 {
@@ -280,6 +280,10 @@ namespace Vigor
     public:
 
         VigorCMD(uint16_t width = 640, uint16_t height = 480)
+            : pipelineLayout(VK_NULL_HANDLE)
+            , swapChain(VK_NULL_HANDLE)
+            , swapChainExtent()
+            , swapChainImageFormat(VK_FORMAT_UNDEFINED)
         {
             WindowWidth = width;
             WindowHeight = height;
@@ -509,44 +513,7 @@ namespace Vigor
 
         void InitQueueFamilies()
         {
-            uint32_t queueFamilyCount;
-            vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
-
-            std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-            vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies.data());
-
-            uint32_t i = 0;
-            for (VkQueueFamilyProperties queueFamily : queueFamilies)
-            {
-                if (queueFamilyIndicies.IsComplete())
-                {
-                    break;
-                }
-
-                // Graphics
-                if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT)
-                {
-                    queueFamilyIndicies.graphicsFamily = i;
-                }
-
-                // Compute
-                VkBool32 support;
-                if (queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT)
-                {
-                    queueFamilyIndicies.computeFamily = i;
-                }
-
-                if (!queueFamilyIndicies.presentFamily.has_value())
-                {
-                    vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, i, surface, &support);
-                    if (support)
-                    {
-                        queueFamilyIndicies.presentFamily = i;
-                    }
-                }
-
-                ++i;
-            }
+            queueFamilyIndicies = Vigor::Utilities::GetQueueFamilies(physicalDevice, surface);
         }
 
         void InitSurface()
