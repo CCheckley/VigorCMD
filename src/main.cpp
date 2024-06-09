@@ -227,6 +227,8 @@ namespace Vigor
 
                 ++i;
             }
+
+            return queueFamilyIndicies;
         }
 
         static VkShaderModule CreateShaderModule(const std::vector<char>& code, VkDevice logicalDevice)
@@ -343,6 +345,9 @@ namespace Vigor
             InitVKPhysicalDevice();
             InitQueueFamilies();
             InitLogicalDevice();
+            InitSwapChain();
+            InitImageViews();
+            InitGraphicsPipeline();
         }
 
         void Run()
@@ -365,6 +370,8 @@ namespace Vigor
 
         void Shutdown()
         {
+            vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
+
             for (auto imageView : swapChainImageViews)
             {
                 vkDestroyImageView(logicalDevice, imageView, nullptr);
@@ -703,13 +710,13 @@ namespace Vigor
 
         void InitGraphicsPipeline()
         {
-            auto VertexShaderCode = Vigor::Utilities::File::Read("../shaders/TriVS.spv");
-            auto PixelShaderCode = Vigor::Utilities::File::Read("../shaders/TriPS.spv");
+            // Shader Module Setup
+            auto VertexShaderCode = Vigor::Utilities::File::Read("./shaders/TriVS.spv");
+            auto PixelShaderCode = Vigor::Utilities::File::Read("./shaders/TriPS.spv");
 
             VkShaderModule vertexShaderModule = Vigor::Utilities::CreateShaderModule(VertexShaderCode, logicalDevice);
             VkShaderModule pixelShaderModule = Vigor::Utilities::CreateShaderModule(PixelShaderCode, logicalDevice);
 
-            // TODO
             VkPipelineShaderStageCreateInfo createInfoVertexShaderStage{};
             createInfoVertexShaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
             createInfoVertexShaderStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -724,8 +731,171 @@ namespace Vigor
 
             VkPipelineShaderStageCreateInfo shaderStages[] = { createInfoVertexShaderStage, createInfoPixelShaderStage };
 
+            // Shader Module Cleanup
             vkDestroyShaderModule(logicalDevice, vertexShaderModule, nullptr);
             vkDestroyShaderModule(logicalDevice, pixelShaderModule, nullptr);
+
+            // Dynamic State Setup
+            std::vector<VkDynamicState> dynamicStates =
+            {
+                VK_DYNAMIC_STATE_VIEWPORT,
+                VK_DYNAMIC_STATE_SCISSOR
+            };
+
+            VkPipelineDynamicStateCreateInfo createInfoDynamicState{};
+            createInfoDynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            createInfoDynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()); // TODO - remove cast if possible
+            createInfoDynamicState.pDynamicStates = dynamicStates.data();
+
+            // Vertex Input
+            VkPipelineVertexInputStateCreateInfo createInfoVertexInput{};
+            createInfoVertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            createInfoVertexInput.vertexBindingDescriptionCount = 0; // not currently sending a vertex buffer
+            createInfoVertexInput.pVertexBindingDescriptions = nullptr;
+            createInfoVertexInput.vertexAttributeDescriptionCount = 0; // not currently sending a vertex buffer
+            createInfoVertexInput.pVertexAttributeDescriptions = nullptr;
+
+            // Input Assembly
+            VkPipelineInputAssemblyStateCreateInfo createInfoInputAssembly{};
+            createInfoInputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            createInfoInputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            createInfoInputAssembly.primitiveRestartEnable = VK_FALSE; // if VK_TRUE, then it's possible to break up lines and triangles in the _STRIP topology modes by using a special index of 0xFFFF or 0xFFFFFFFF.
+
+            // Viewport and Scissor
+            /* -- NOTE --
+            * Viewport defines the region that pixels transformed from an image to the framebuffer
+            * Scissor defines the region of pixels that are stored, anything outside this within the viewport are discarded by the rasterizer
+            */
+
+            /* -- NOTE --
+            * These can be setup as static as part of pipeline state but are supported as dynamic
+            * This generally doesnt have a noticeable perf hit and is worthwhile as commonly needed
+            */
+
+            // Viewport
+            VkViewport viewport{};
+            viewport.x = 0.0f;
+            viewport.y = 0.0f;
+            viewport.width = (float)swapChainExtent.width; // -- NOTE -- Swap chain width and height can differ from window height/width, but will be what we use as framebuffers
+            viewport.height = (float)swapChainExtent.height; // -- NOTE -- Swap chain width and height can differ from window height/width, but will be what we use as framebuffers
+            viewport.minDepth = 0.0f; // -- NOTE -- these values are normalised within 0 - 1
+            viewport.maxDepth = 1.0f; // -- NOTE -- these values are normalised within 0 - 1
+
+            // Scissor
+            VkRect2D scissor{};
+            scissor.offset = { 0,0 };
+            scissor.extent = swapChainExtent; // This scissor covers the entire range of the vieport so no pixels are discarded by the rstr
+
+            /* -- NOTE --
+            * With dynamic state it's even possible to specify different viewports and or scissor rectangles within a single command buffer.
+            * 
+            * Without dynamic state, the viewport and scissor rectangle need to be set in the pipeline using the VkPipelineViewportStateCreateInfo struct.
+            * This makes the viewport and scissor rectangle for this pipeline immutable.
+            * Any changes required to these values would require a new pipeline to be created with the new values.
+            * 
+            * Using multiple requires enabling a GPU feature (see logical device init).
+            */
+
+            // Viewport Pipeline
+            VkPipelineViewportStateCreateInfo createInfoViewportState{};
+            createInfoViewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            createInfoViewportState.viewportCount = 1;
+            createInfoViewportState.pViewports = &viewport;
+            createInfoViewportState.scissorCount = 1;
+            createInfoViewportState.pScissors = &scissor;
+
+            // Rasterizer
+            VkPipelineRasterizationStateCreateInfo createInfoRasterizer{};
+            createInfoRasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            /*
+            * if VK_TRUE, then fragments that are beyond the near and far planes are clamped to them as opposed to discarding them.
+            * This is useful in some special cases like shadow maps.
+            * Using this requires enabling a GPU feature.
+            */
+            createInfoRasterizer.depthClampEnable = VK_FALSE;
+            createInfoRasterizer.rasterizerDiscardEnable = VK_FALSE; // if VK_TRUE, then geometry never passes through the rasterizer stage. This disables any output to the framebuffer.
+            createInfoRasterizer.polygonMode = VK_POLYGON_MODE_FILL; // Using any mode other than fill requires enabling a GPU feature.
+            createInfoRasterizer.lineWidth = 1.0f; // describes the thickness of lines in number of fragments. The maximum line width depends on the hardware, any line thicker than 1.0f requires the "wideLines" GPU feature.
+            createInfoRasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+            createInfoRasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+            /*
+            * The rasterizer can alter the depth values by adding a constant value or biasing them based on a fragment's slope.
+            * This is sometimes used for shadow mapping, but we won't be using it so depthBiasEnable is set to VK_FALSE
+            */
+            createInfoRasterizer.depthBiasEnable = VK_FALSE;
+            createInfoRasterizer.depthBiasConstantFactor = 0.0f; // Optional
+            createInfoRasterizer.depthBiasClamp = 0.0f; // Optional
+            createInfoRasterizer.depthBiasSlopeFactor = 0.0f; // Optional
+
+            // MSAA (Multisampling) - Disabled with this config
+            VkPipelineMultisampleStateCreateInfo createInfoMultisampling{};
+            createInfoMultisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            createInfoMultisampling.sampleShadingEnable = VK_FALSE;
+            createInfoMultisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            createInfoMultisampling.minSampleShading = 1.0f; // Optional
+            createInfoMultisampling.pSampleMask = nullptr; // Optional
+            createInfoMultisampling.alphaToCoverageEnable = VK_FALSE; // Optional
+            createInfoMultisampling.alphaToOneEnable = VK_FALSE; // Optional
+
+            /* Depth and Stencil testing
+            * To configure this VkPipelineDepthStencilStateCreateInfo must be used but is ignored for now
+            */
+
+            // Color Blending - (At the moment the following config doesnt perform any color blending with the chosen settings)
+            /* -- NOTE --
+            * There are two types of structs to configure color blending.
+            * The first struct, VkPipelineColorBlendAttachmentState contains the configuration per attached framebuffer.
+            * The second struct, VkPipelineColorBlendStateCreateInfo contains the global color blending settings.
+            * 
+            * ATM we only have one framebuffer, so we do the following:
+            */
+
+            // Per frame buffer
+            VkPipelineColorBlendAttachmentState createInfoColorBlendAttachment{};
+            createInfoColorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+            // Blending Disabled:
+            createInfoColorBlendAttachment.blendEnable = VK_FALSE; // the new color from the fragment shader is passed through unmodified, otherwise the resulting color is AND'd with the colorWriteMask to determine which channels are actually passed through
+            createInfoColorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE; // Optional
+            createInfoColorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO; // Optional
+            createInfoColorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD; // Optional
+            createInfoColorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE; // Optional
+            createInfoColorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO; // Optional
+            createInfoColorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD; // Optional
+
+            // Alpha blending:
+            //createInfoColorBlendAttachment.blendEnable = VK_TRUE;
+            //createInfoColorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            //createInfoColorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            //createInfoColorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+            //createInfoColorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            //createInfoColorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            //createInfoColorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+            // Global blend settings
+            VkPipelineColorBlendStateCreateInfo createInfoColorBlending{};
+            createInfoColorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            createInfoColorBlending.logicOpEnable = VK_FALSE; // set to true to utilize bitwise blending, will act as if each attachment has blendEnable set to false
+            createInfoColorBlending.logicOp = VK_LOGIC_OP_COPY; // Optional
+            createInfoColorBlending.attachmentCount = 1;
+            createInfoColorBlending.pAttachments = &createInfoColorBlendAttachment;
+            createInfoColorBlending.blendConstants[0] = 0.0f; // Optional
+            createInfoColorBlending.blendConstants[1] = 0.0f; // Optional
+            createInfoColorBlending.blendConstants[2] = 0.0f; // Optional
+            createInfoColorBlending.blendConstants[3] = 0.0f; // Optional
+
+            // Pipeline Layout - empty for now, need to specificy uniforms here when used
+            VkPipelineLayoutCreateInfo createInfoPipelineLayout{};
+            createInfoPipelineLayout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            createInfoPipelineLayout.setLayoutCount = 0; // Optional
+            createInfoPipelineLayout.pSetLayouts = nullptr; // Optional
+            createInfoPipelineLayout.pushConstantRangeCount = 0; // Optional
+            createInfoPipelineLayout.pPushConstantRanges = nullptr; // Optional
+
+            if (vkCreatePipelineLayout(logicalDevice, &createInfoPipelineLayout, nullptr, &pipelineLayout) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to create pipeline layout!");
+            }
         }
 
     private:
@@ -748,6 +918,8 @@ namespace Vigor
         VkSwapchainKHR swapChain;
         VkFormat swapChainImageFormat;
         VkExtent2D swapChainExtent;
+
+        VkPipelineLayout pipelineLayout;
 
         std::vector<VkImage> swapChainImages;
         std::vector<VkImageView> swapChainImageViews;
