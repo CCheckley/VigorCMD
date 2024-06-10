@@ -351,6 +351,7 @@ namespace Vigor
             InitLogicalDevice();
             InitSwapChain();
             InitImageViews();
+            InitRenderPass();
             InitGraphicsPipeline();
         }
 
@@ -375,6 +376,7 @@ namespace Vigor
         void Shutdown()
         {
             vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
+            vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
 
             for (auto imageView : swapChainImageViews)
             {
@@ -865,6 +867,53 @@ namespace Vigor
             }
         }
 
+        void InitRenderPass()
+        {
+            VkAttachmentDescription colorAttachment{};
+            colorAttachment.format = swapChainImageFormat;
+            colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT; // no msaa yet so stick with 1
+            colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // not doing anything with stencil yet so dont care
+            colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // not doing anything with stencil yet so dont care
+            colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+            // Sub-passes and attachment refs
+            VkAttachmentReference colorAttachmentRef{};
+            colorAttachmentRef.attachment = 0; // specifies which attachment to reference by its index
+            colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+            VkSubpassDescription subpass{};
+            subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS; // supports compute subpasses so need to be explicit
+            subpass.colorAttachmentCount = 1;
+            subpass.pColorAttachments = &colorAttachmentRef;
+
+            /* -- NOTE --
+            * The index of the attachment in this array is directly referenced from the fragment shader with "layout(location = 0) out vec4 outColor" in OpenGL
+            * 
+            * The following other types of attachments can be referenced by a subpass:
+            *   - pInputAttachments: Attachments that are read from a shader
+            *   - pResolveAttachments: Attachments used for multisampling color attachments
+            *   - pDepthStencilAttachment: Attachment for depth and stencil data
+            *   - pPreserveAttachments: Attachments that are not used by this subpass, but for which the data must be preserved
+            */
+
+            VkRenderPassCreateInfo createInfoRenderPass{};
+            createInfoRenderPass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+            createInfoRenderPass.attachmentCount = 1;
+            createInfoRenderPass.pAttachments = &colorAttachment;
+            createInfoRenderPass.subpassCount = 1;
+            createInfoRenderPass.pSubpasses = &subpass;
+
+            VkResult createRenderPassRes = vkCreateRenderPass(logicalDevice, &createInfoRenderPass, nullptr, &renderPass);
+            if (createRenderPassRes != VK_SUCCESS)
+            {
+                std::string errorMsg = std::format("Failed to create render pass Error: {}\n\n", (int)createRenderPassRes);
+                throw std::runtime_error(errorMsg);
+            }
+        }
+
     private:
 
         uint16_t WindowWidth = 640;
@@ -886,6 +935,7 @@ namespace Vigor
         VkFormat swapChainImageFormat;
         VkExtent2D swapChainExtent;
 
+        VkRenderPass renderPass;
         VkPipelineLayout pipelineLayout;
 
         std::vector<VkImage> swapChainImages;
