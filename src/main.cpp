@@ -284,6 +284,8 @@ namespace Vigor
             , swapChain(VK_NULL_HANDLE)
             , swapChainExtent()
             , swapChainImageFormat(VK_FORMAT_UNDEFINED)
+            , renderPass()
+            , graphicsPipeline()
         {
             WindowWidth = width;
             WindowHeight = height;
@@ -375,6 +377,7 @@ namespace Vigor
 
         void Shutdown()
         {
+            vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
             vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
             vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
 
@@ -700,10 +703,6 @@ namespace Vigor
 
             VkPipelineShaderStageCreateInfo shaderStages[] = { createInfoVertexShaderStage, createInfoPixelShaderStage };
 
-            // Shader Module Cleanup
-            vkDestroyShaderModule(logicalDevice, vertexShaderModule, nullptr);
-            vkDestroyShaderModule(logicalDevice, pixelShaderModule, nullptr);
-
             // Dynamic State Setup
             std::vector<VkDynamicState> dynamicStates =
             {
@@ -774,27 +773,27 @@ namespace Vigor
             createInfoViewportState.pScissors = &scissor;
 
             // Rasterizer
-            VkPipelineRasterizationStateCreateInfo createInfoRasterizer{};
-            createInfoRasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            VkPipelineRasterizationStateCreateInfo createInfoRasterizerState{};
+            createInfoRasterizerState.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
             /*
             * if VK_TRUE, then fragments that are beyond the near and far planes are clamped to them as opposed to discarding them.
             * This is useful in some special cases like shadow maps.
             * Using this requires enabling a GPU feature.
             */
-            createInfoRasterizer.depthClampEnable = VK_FALSE;
-            createInfoRasterizer.rasterizerDiscardEnable = VK_FALSE; // if VK_TRUE, then geometry never passes through the rasterizer stage. This disables any output to the framebuffer.
-            createInfoRasterizer.polygonMode = VK_POLYGON_MODE_FILL; // Using any mode other than fill requires enabling a GPU feature.
-            createInfoRasterizer.lineWidth = 1.0f; // describes the thickness of lines in number of fragments. The maximum line width depends on the hardware, any line thicker than 1.0f requires the "wideLines" GPU feature.
-            createInfoRasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-            createInfoRasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+            createInfoRasterizerState.depthClampEnable = VK_FALSE;
+            createInfoRasterizerState.rasterizerDiscardEnable = VK_FALSE; // if VK_TRUE, then geometry never passes through the rasterizer stage. This disables any output to the framebuffer.
+            createInfoRasterizerState.polygonMode = VK_POLYGON_MODE_FILL; // Using any mode other than fill requires enabling a GPU feature.
+            createInfoRasterizerState.lineWidth = 1.0f; // describes the thickness of lines in number of fragments. The maximum line width depends on the hardware, any line thicker than 1.0f requires the "wideLines" GPU feature.
+            createInfoRasterizerState.cullMode = VK_CULL_MODE_BACK_BIT;
+            createInfoRasterizerState.frontFace = VK_FRONT_FACE_CLOCKWISE;
             /*
             * The rasterizer can alter the depth values by adding a constant value or biasing them based on a fragment's slope.
             * This is sometimes used for shadow mapping, but we won't be using it so depthBiasEnable is set to VK_FALSE
             */
-            createInfoRasterizer.depthBiasEnable = VK_FALSE;
-            createInfoRasterizer.depthBiasConstantFactor = 0.0f; // Optional
-            createInfoRasterizer.depthBiasClamp = 0.0f; // Optional
-            createInfoRasterizer.depthBiasSlopeFactor = 0.0f; // Optional
+            createInfoRasterizerState.depthBiasEnable = VK_FALSE;
+            createInfoRasterizerState.depthBiasConstantFactor = 0.0f; // Optional
+            createInfoRasterizerState.depthBiasClamp = 0.0f; // Optional
+            createInfoRasterizerState.depthBiasSlopeFactor = 0.0f; // Optional
 
             // MSAA (Multisampling) - Disabled with this config
             VkPipelineMultisampleStateCreateInfo createInfoMultisampling{};
@@ -865,6 +864,39 @@ namespace Vigor
             {
                 throw std::runtime_error("Failed to create pipeline layout!");
             }
+
+            // Create the pipeline
+            VkGraphicsPipelineCreateInfo createInfoGraphicsPipeline{};
+            createInfoGraphicsPipeline.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            createInfoGraphicsPipeline.stageCount = 2; // number of shader stages
+            createInfoGraphicsPipeline.pStages = shaderStages;
+            createInfoGraphicsPipeline.pVertexInputState = &createInfoVertexInput;
+            createInfoGraphicsPipeline.pInputAssemblyState = &createInfoInputAssembly;
+            createInfoGraphicsPipeline.pViewportState = &createInfoViewportState;
+            createInfoGraphicsPipeline.pRasterizationState = &createInfoRasterizerState;
+            createInfoGraphicsPipeline.pMultisampleState = &createInfoMultisampling;
+            createInfoGraphicsPipeline.pDepthStencilState = nullptr; // not used yet
+            createInfoGraphicsPipeline.pColorBlendState = &createInfoColorBlending;
+            createInfoGraphicsPipeline.pDynamicState = &createInfoDynamicState;
+            createInfoGraphicsPipeline.layout = pipelineLayout;
+
+            // https://registry.khronos.org/vulkan/specs/1.3-extensions/html/chap8.html#renderpass-compatibility
+            createInfoGraphicsPipeline.renderPass = renderPass;
+            createInfoGraphicsPipeline.subpass = 0; // idx
+
+            //Vulkan allows you to create a new graphics pipeline by deriving from an existing pipeline
+            createInfoGraphicsPipeline.basePipelineHandle = VK_NULL_HANDLE;
+            createInfoGraphicsPipeline.basePipelineIndex = -1;
+
+            // pipeline cache and batch pipeline creation can also be configured
+            if (vkCreateGraphicsPipelines(logicalDevice, VK_NULL_HANDLE, 1, &createInfoGraphicsPipeline, nullptr, &graphicsPipeline) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to create graphics pipeline!");
+            }
+
+            // Shader Module Cleanup
+            vkDestroyShaderModule(logicalDevice, vertexShaderModule, nullptr);
+            vkDestroyShaderModule(logicalDevice, pixelShaderModule, nullptr);
         }
 
         void InitRenderPass()
@@ -937,6 +969,8 @@ namespace Vigor
 
         VkRenderPass renderPass;
         VkPipelineLayout pipelineLayout;
+
+        VkPipeline graphicsPipeline;
 
         std::vector<VkImage> swapChainImages;
         std::vector<VkImageView> swapChainImageViews;
