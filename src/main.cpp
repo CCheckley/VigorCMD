@@ -249,6 +249,77 @@ namespace Vigor
             return shaderModule;
         }
 
+        static void RecordCommandBuffer
+        (
+            VkCommandBuffer commandBuffer,
+            uint32_t swapchainImageIdx,
+            const VkRenderPass& renderPass,
+            const std::vector<VkFramebuffer>& swapChainFramebuffers,
+            const VkExtent2D& swapChainExtent,
+            const VkPipeline& graphicsPipeline
+        )
+        {
+            VkCommandBufferBeginInfo beginInfoCommandBuffer{};
+            beginInfoCommandBuffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfoCommandBuffer.flags = 0;
+            beginInfoCommandBuffer.pInheritanceInfo = nullptr; // specifies which state to inherit from the calling primary command buffers if the buffer is secondary
+
+            VkResult beginCommandBufferRes = vkBeginCommandBuffer(commandBuffer, &beginInfoCommandBuffer);
+            if (beginCommandBufferRes != VK_SUCCESS)
+            {
+                std::string errorMsg = std::format("Failed to begin command buffer Error: {}\n\n", (int)beginCommandBufferRes);
+                throw std::runtime_error(errorMsg);
+            }
+
+            VkRenderPassBeginInfo beginInfoRenderPass{};
+            beginInfoRenderPass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            beginInfoRenderPass.renderPass = renderPass;
+            beginInfoRenderPass.framebuffer = swapChainFramebuffers[swapchainImageIdx];
+
+            beginInfoRenderPass.renderArea.offset = { 0, 0 };
+            beginInfoRenderPass.renderArea.extent = swapChainExtent;
+
+            VkClearValue clearColor = {0.0f, 0.0f, 0.0f, 1.0f};
+            beginInfoRenderPass.clearValueCount = 1;
+            beginInfoRenderPass.pClearValues = &clearColor;
+
+            vkCmdBeginRenderPass(commandBuffer, &beginInfoRenderPass, VK_SUBPASS_CONTENTS_INLINE);
+
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+            VkViewport viewport{};
+            viewport.x = 0.0f;
+            viewport.y = 0.0f;
+            viewport.width = static_cast<float>(swapChainExtent.width);
+            viewport.height = static_cast<float>(swapChainExtent.height);
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+
+            VkRect2D scissor{};
+            scissor.offset = { 0, 0 };
+            scissor.extent = swapChainExtent;
+            vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+            vkCmdDraw
+            (
+                commandBuffer,
+                3, // vertexCount
+                1, // instanceCount
+                0, // firstVertex
+                0 // firstInstance
+            );
+
+            vkCmdEndRenderPass(commandBuffer);
+
+            VkResult endCommandBufferRes = vkEndCommandBuffer(commandBuffer);
+            if (endCommandBufferRes != VK_SUCCESS)
+            {
+                std::string errorMsg = std::format("Failed to end command buffer Error: {}\n\n", (int)endCommandBufferRes);
+                throw std::runtime_error(errorMsg);
+            }
+        }
+
         namespace File
         {
             static std::vector<char> Read(const std::string& filename)
@@ -355,6 +426,9 @@ namespace Vigor
             InitImageViews();
             InitRenderPass();
             InitGraphicsPipeline();
+            InitFrameBuffers();
+            InitCommandPool();
+            InitCommandBuffer();
         }
 
         void Run()
@@ -377,6 +451,13 @@ namespace Vigor
 
         void Shutdown()
         {
+            vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
+
+            for (auto framebuffer : swapChainFramebuffers)
+            {
+                vkDestroyFramebuffer(logicalDevice, framebuffer, nullptr);
+            }
+
             vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
             vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
             vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
@@ -946,6 +1027,58 @@ namespace Vigor
             }
         }
 
+        void InitFrameBuffers()
+        {
+            swapChainFramebuffers.resize(swapChainImageViews.size());
+
+            for (size_t i = 0; i < swapChainImageViews.size(); i++)
+            {
+                VkImageView attachments[] = { swapChainImageViews[i] };
+
+                VkFramebufferCreateInfo createInfoFrameBuffer{};
+                createInfoFrameBuffer.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+                createInfoFrameBuffer.renderPass = renderPass;
+                createInfoFrameBuffer.attachmentCount = 1;
+                createInfoFrameBuffer.pAttachments = attachments;
+                createInfoFrameBuffer.width = swapChainExtent.width;
+                createInfoFrameBuffer.height = swapChainExtent.height;
+                createInfoFrameBuffer.layers = 1;
+
+                VkResult createFrameBufferRes = vkCreateFramebuffer(logicalDevice, &createInfoFrameBuffer, nullptr, &swapChainFramebuffers[i]);
+                if (createFrameBufferRes != VK_SUCCESS)
+                {
+                    std::string errorMsg = std::format("Failed to create frame buffer Error: {}\n\n", (int)createFrameBufferRes);
+                    throw std::runtime_error(errorMsg);
+                }
+            }
+        }
+
+        void InitCommandPool()
+        {
+            QueueFamilyIndicies queueFamilyIndicies = Vigor::Utilities::GetQueueFamilies(physicalDevice, surface);
+
+            VkCommandPoolCreateInfo createInfoCommandPool{};
+            createInfoCommandPool.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            createInfoCommandPool.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+            createInfoCommandPool.queueFamilyIndex = queueFamilyIndicies.graphicsFamily.value();
+
+            VkResult createCommandPoolRes = vkCreateCommandPool(logicalDevice, &createInfoCommandPool, nullptr, &commandPool);
+            if (createCommandPoolRes != VK_SUCCESS)
+            {
+                std::string errorMsg = std::format("Failed to create command pool Error: {}\n\n", (int)createCommandPoolRes);
+                throw std::runtime_error(errorMsg);
+            }
+        }
+
+        void InitCommandBuffer()
+        {
+            VkCommandBufferAllocateInfo allocInfoCommandBuffer{};
+            allocInfoCommandBuffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfoCommandBuffer.commandPool = commandPool;
+            allocInfoCommandBuffer.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // primary can be submitted but not called from other buffers, secondary cannot be submitted but can be called from others
+            allocInfoCommandBuffer.commandBufferCount = 1;
+        }
+
     private:
 
         uint16_t WindowWidth = 640;
@@ -972,8 +1105,12 @@ namespace Vigor
 
         VkPipeline graphicsPipeline;
 
+        VkCommandPool commandPool; // allocation and memory management for command buffers
+        VkCommandBuffer commandBuffer;
+
         std::vector<VkImage> swapChainImages;
         std::vector<VkImageView> swapChainImageViews;
+        std::vector<VkFramebuffer> swapChainFramebuffers;
 
 #if VULKAN_VALIDATION_LAYERS_ENABLED
         std::vector<const char*> validationLayerNames;
