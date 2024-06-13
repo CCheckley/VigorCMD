@@ -173,7 +173,13 @@ namespace Vigor
 
             bool bResult = false;
             bResult |= (physicalDeviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU); // Force dedicated GPU requirement
-            bResult |= (physicalDeviceFeatures.geometryShader); // Force Geo-shader requirement
+
+            // Force Geo-shader requirement
+            if (physicalDeviceFeatures.geometryShader != VK_TRUE)
+            {
+                return false;
+            }
+
             bResult |= (CheckDeviceExtensionSupport(physicalDevice, deviceExtensions));
 
             bool bSwapchainAcceptable = false;
@@ -355,8 +361,15 @@ namespace Vigor
             , swapChain(VK_NULL_HANDLE)
             , swapChainExtent()
             , swapChainImageFormat(VK_FORMAT_UNDEFINED)
+            , graphicsQueue()
+            , presentQueue()
             , renderPass()
             , graphicsPipeline()
+            , commandBuffer()
+            , commandPool()
+            , imageAvailableSemaphore()
+            , renderFinishedSemaphore()
+            , inFlightFence()
         {
             WindowWidth = width;
             WindowHeight = height;
@@ -429,6 +442,7 @@ namespace Vigor
             InitFrameBuffers();
             InitCommandPool();
             InitCommandBuffer();
+            InitSyncObjects();
         }
 
         void Run()
@@ -446,11 +460,19 @@ namespace Vigor
                         break;
                     }
                 }
+
+                DrawFrame();
             }
+
+            vkDeviceWaitIdle(logicalDevice);
         }
 
         void Shutdown()
         {
+            vkDestroySemaphore(logicalDevice, imageAvailableSemaphore, nullptr);
+            vkDestroySemaphore(logicalDevice, renderFinishedSemaphore, nullptr);
+            vkDestroyFence(logicalDevice, inFlightFence, nullptr);
+
             vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
 
             for (auto framebuffer : swapChainFramebuffers)
@@ -481,6 +503,7 @@ namespace Vigor
 
     private:
 
+        // Initialization methods
         void InitWindow()
         {
             SDL_Init(SDL_INIT_EVERYTHING);
@@ -648,10 +671,7 @@ namespace Vigor
                 throw std::runtime_error("Failed to create Logical VK Device");
             }
 
-            VkQueue presentQueue;
             vkGetDeviceQueue(logicalDevice, queueFamilyIndicies.presentFamily.value(), 0, &presentQueue);
-
-            VkQueue graphicsQueue;
             vkGetDeviceQueue(logicalDevice, queueFamilyIndicies.graphicsFamily.value(), 0, &graphicsQueue);
 
             SDL_Log("Initialized with errors: %s", SDL_GetError());
@@ -1012,12 +1032,26 @@ namespace Vigor
             *   - pPreserveAttachments: Attachments that are not used by this subpass, but for which the data must be preserved
             */
 
+            VkSubpassDependency subpassDependency{};
+            // dependant subpass and dependency
+            subpassDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+            subpassDependency.dstSubpass = 0;
+            // what do we wait on
+            subpassDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            subpassDependency.srcAccessMask = 0;
+            // wait on color attachment stage and the writing of this, dont transition until allowed + necessary
+            subpassDependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            subpassDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
             VkRenderPassCreateInfo createInfoRenderPass{};
             createInfoRenderPass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
             createInfoRenderPass.attachmentCount = 1;
             createInfoRenderPass.pAttachments = &colorAttachment;
             createInfoRenderPass.subpassCount = 1;
             createInfoRenderPass.pSubpasses = &subpass;
+            // use subpass depenency
+            createInfoRenderPass.dependencyCount = 1;
+            createInfoRenderPass.pDependencies = &subpassDependency;
 
             VkResult createRenderPassRes = vkCreateRenderPass(logicalDevice, &createInfoRenderPass, nullptr, &renderPass);
             if (createRenderPassRes != VK_SUCCESS)
@@ -1077,6 +1111,96 @@ namespace Vigor
             allocInfoCommandBuffer.commandPool = commandPool;
             allocInfoCommandBuffer.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // primary can be submitted but not called from other buffers, secondary cannot be submitted but can be called from others
             allocInfoCommandBuffer.commandBufferCount = 1;
+
+            if (vkAllocateCommandBuffers(logicalDevice, &allocInfoCommandBuffer, &commandBuffer) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to allocate command buffers!");
+            }
+        }
+
+        void InitSyncObjects()
+        {
+            VkSemaphoreCreateInfo createInfoSemaphore{};
+            createInfoSemaphore.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+            if (vkCreateSemaphore(logicalDevice, &createInfoSemaphore, nullptr, &imageAvailableSemaphore))
+            {
+                throw std::runtime_error("Failed to create imageAvailableSemaphore!");
+                return;
+            }
+
+            if (vkCreateSemaphore(logicalDevice, &createInfoSemaphore, nullptr, &renderFinishedSemaphore))
+            {
+                throw std::runtime_error("Failed to create renderFinishedSemaphore!");
+                return;
+            }
+
+            VkFenceCreateInfo createInfoFence{};
+            createInfoFence.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            createInfoFence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+            if (vkCreateFence(logicalDevice, &createInfoFence, nullptr, &inFlightFence))
+            {
+                throw std::runtime_error("Failed to create inFlightFence!");
+                return;
+            }
+        }
+
+        // Runtime main
+        void DrawFrame()
+        {
+            // TODO
+            // wait for prev frame to end
+            // get image from swapchain
+            // record a cmd buffer that can render the scene onto the aquired swapchain img
+            // submit recorded buffer
+            // present swapchain img
+
+            vkWaitForFences(logicalDevice, 1, &inFlightFence, VK_TRUE, UINT64_MAX); // wait for previous frame to finish
+            vkResetFences(logicalDevice, 1, &inFlightFence);
+
+            // TODO
+            uint32_t imageIdx = 0;
+            vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIdx);
+
+            vkResetCommandBuffer(commandBuffer, 0);
+
+            Vigor::Utilities::RecordCommandBuffer(commandBuffer, imageIdx, renderPass, swapChainFramebuffers, swapChainExtent, graphicsPipeline);
+
+            VkSubmitInfo submitInfo{};
+            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+            VkSemaphore waitSemaphores[] = { imageAvailableSemaphore };
+            VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+            submitInfo.waitSemaphoreCount = 1;
+            submitInfo.pWaitSemaphores = waitSemaphores;
+            submitInfo.pWaitDstStageMask = waitStages;
+
+            submitInfo.commandBufferCount = 1;
+            submitInfo.pCommandBuffers = &commandBuffer;
+
+            VkSemaphore signalSemaphores[] = { renderFinishedSemaphore };
+            submitInfo.signalSemaphoreCount = 1;
+            submitInfo.pSignalSemaphores = signalSemaphores;
+
+            if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to submit command buffer draw!");
+            }
+
+            VkPresentInfoKHR presentInfo{};
+            presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+            presentInfo.waitSemaphoreCount = 1;
+            presentInfo.pWaitSemaphores = signalSemaphores;
+
+            VkSwapchainKHR swapChains[] = { swapChain };
+            presentInfo.swapchainCount = 1;
+            presentInfo.pSwapchains = swapChains;
+            presentInfo.pImageIndices = &imageIdx;
+
+            presentInfo.pResults = nullptr; // specify an array of VkResult values to check for every individual swap chain if presentation was successful
+
+            vkQueuePresentKHR(presentQueue, &presentInfo);
         }
 
     private:
@@ -1107,6 +1231,13 @@ namespace Vigor
 
         VkCommandPool commandPool; // allocation and memory management for command buffers
         VkCommandBuffer commandBuffer;
+
+        VkSemaphore imageAvailableSemaphore;
+        VkSemaphore renderFinishedSemaphore;
+        VkFence inFlightFence;
+
+        VkQueue presentQueue;
+        VkQueue graphicsQueue;
 
         std::vector<VkImage> swapChainImages;
         std::vector<VkImageView> swapChainImageViews;

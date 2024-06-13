@@ -1,4 +1,2 @@
 ﻿  main.cpp
-E:\repos\VigorCMD\src\main.cpp(176,47): warning C4805: '|=': unsafe mix of type 'bool' and type 'VkBool32' in operation
-E:\repos\VigorCMD\src\main.cpp(176,47): warning C4805: '|': unsafe mix of type 'bool' and type 'VkBool32' in operation
   VigorCMD.vcxproj -> E:\repos\VigorCMD\x64\Debug\VigorCMD.exe
