@@ -16,6 +16,8 @@
 #define VULKAN_VALIDATION_LAYERS_ENABLED 1
 #define VULKAN_VALIDATION_LAYER_VERBOSE_LOGGING 1
 
+const int MAX_FRAMES_IN_FLIGHT = 2;
+
 constexpr uint32_t WINDOW_WIDTH = 640;
 constexpr uint32_t WINDOW_HEIGHT = 480;
 
@@ -23,6 +25,25 @@ static constexpr const char* const KHRONOS_VALIDATION_LAYER_NAME = "VK_LAYER_KHR
 
 namespace Vigor
 {
+    struct FrameData
+    {
+        std::vector<VkCommandBuffer> commandBuffers;
+
+        std::vector<VkSemaphore> imageAvailableSemaphores;
+        std::vector<VkSemaphore> renderFinishedSemaphores;
+        std::vector<VkFence> inFlightFences;
+
+        void Shutdown(VkDevice logicalDevice)
+        {
+            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+            {
+                vkDestroySemaphore(logicalDevice, imageAvailableSemaphores[i], nullptr);
+                vkDestroySemaphore(logicalDevice, renderFinishedSemaphores[i], nullptr);
+                vkDestroyFence(logicalDevice, inFlightFences[i], nullptr);
+            }
+        }
+    };
+
     struct QueueFamilyIndicies
     {
         std::optional<uint32_t> presentFamily;
@@ -365,11 +386,8 @@ namespace Vigor
             , presentQueue()
             , renderPass()
             , graphicsPipeline()
-            , commandBuffer()
             , commandPool()
-            , imageAvailableSemaphore()
-            , renderFinishedSemaphore()
-            , inFlightFence()
+            , frameData()
         {
             WindowWidth = width;
             WindowHeight = height;
@@ -441,7 +459,7 @@ namespace Vigor
             InitGraphicsPipeline();
             InitFrameBuffers();
             InitCommandPool();
-            InitCommandBuffer();
+            InitCommandBuffers();
             InitSyncObjects();
         }
 
@@ -469,9 +487,7 @@ namespace Vigor
 
         void Shutdown()
         {
-            vkDestroySemaphore(logicalDevice, imageAvailableSemaphore, nullptr);
-            vkDestroySemaphore(logicalDevice, renderFinishedSemaphore, nullptr);
-            vkDestroyFence(logicalDevice, inFlightFence, nullptr);
+            frameData.Shutdown(logicalDevice);
 
             vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
 
@@ -1104,15 +1120,17 @@ namespace Vigor
             }
         }
 
-        void InitCommandBuffer()
+        void InitCommandBuffers()
         {
+            frameData.commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+
             VkCommandBufferAllocateInfo allocInfoCommandBuffer{};
             allocInfoCommandBuffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
             allocInfoCommandBuffer.commandPool = commandPool;
             allocInfoCommandBuffer.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // primary can be submitted but not called from other buffers, secondary cannot be submitted but can be called from others
-            allocInfoCommandBuffer.commandBufferCount = 1;
+            allocInfoCommandBuffer.commandBufferCount = (uint32_t)frameData.commandBuffers.size();
 
-            if (vkAllocateCommandBuffers(logicalDevice, &allocInfoCommandBuffer, &commandBuffer) != VK_SUCCESS)
+            if (vkAllocateCommandBuffers(logicalDevice, &allocInfoCommandBuffer, frameData.commandBuffers.data()) != VK_SUCCESS)
             {
                 throw std::runtime_error("Failed to allocate command buffers!");
             }
@@ -1120,29 +1138,33 @@ namespace Vigor
 
         void InitSyncObjects()
         {
+            frameData.imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+            frameData.renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+            frameData.inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
             VkSemaphoreCreateInfo createInfoSemaphore{};
             createInfoSemaphore.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-            if (vkCreateSemaphore(logicalDevice, &createInfoSemaphore, nullptr, &imageAvailableSemaphore))
-            {
-                throw std::runtime_error("Failed to create imageAvailableSemaphore!");
-                return;
-            }
-
-            if (vkCreateSemaphore(logicalDevice, &createInfoSemaphore, nullptr, &renderFinishedSemaphore))
-            {
-                throw std::runtime_error("Failed to create renderFinishedSemaphore!");
-                return;
-            }
 
             VkFenceCreateInfo createInfoFence{};
             createInfoFence.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             createInfoFence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-            if (vkCreateFence(logicalDevice, &createInfoFence, nullptr, &inFlightFence))
+            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
             {
-                throw std::runtime_error("Failed to create inFlightFence!");
-                return;
+                if (vkCreateSemaphore(logicalDevice, &createInfoSemaphore, nullptr, &frameData.imageAvailableSemaphores[i]) != VK_SUCCESS)
+                {
+                    throw std::runtime_error("Failed to create imageAvailableSemaphore!");
+                }
+
+                if (vkCreateSemaphore(logicalDevice, &createInfoSemaphore, nullptr, &frameData.renderFinishedSemaphores[i]) != VK_SUCCESS)
+                {
+                    throw std::runtime_error("Failed to create renderFinishedSemaphore!");
+                }
+
+                if (vkCreateFence(logicalDevice, &createInfoFence, nullptr, &frameData.inFlightFences[i]) != VK_SUCCESS)
+                {
+                    throw std::runtime_error("Failed to create inFlightFence!");
+                }
             }
         }
 
@@ -1156,34 +1178,34 @@ namespace Vigor
             // submit recorded buffer
             // present swapchain img
 
-            vkWaitForFences(logicalDevice, 1, &inFlightFence, VK_TRUE, UINT64_MAX); // wait for previous frame to finish
-            vkResetFences(logicalDevice, 1, &inFlightFence);
+            vkWaitForFences(logicalDevice, 1, &frameData.inFlightFences[currentFrame], VK_TRUE, UINT64_MAX); // wait for previous frame to finish
+            vkResetFences(logicalDevice, 1, &frameData.inFlightFences[currentFrame]);
 
             // TODO
             uint32_t imageIdx = 0;
-            vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIdx);
+            vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, frameData.imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIdx);
 
-            vkResetCommandBuffer(commandBuffer, 0);
+            vkResetCommandBuffer(frameData.commandBuffers[currentFrame], 0);
 
-            Vigor::Utilities::RecordCommandBuffer(commandBuffer, imageIdx, renderPass, swapChainFramebuffers, swapChainExtent, graphicsPipeline);
+            Vigor::Utilities::RecordCommandBuffer(frameData.commandBuffers[currentFrame], imageIdx, renderPass, swapChainFramebuffers, swapChainExtent, graphicsPipeline);
 
             VkSubmitInfo submitInfo{};
             submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-            VkSemaphore waitSemaphores[] = { imageAvailableSemaphore };
+            VkSemaphore waitSemaphores[] = { frameData.imageAvailableSemaphores[currentFrame] };
             VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
             submitInfo.waitSemaphoreCount = 1;
             submitInfo.pWaitSemaphores = waitSemaphores;
             submitInfo.pWaitDstStageMask = waitStages;
 
             submitInfo.commandBufferCount = 1;
-            submitInfo.pCommandBuffers = &commandBuffer;
+            submitInfo.pCommandBuffers = &frameData.commandBuffers[currentFrame];
 
-            VkSemaphore signalSemaphores[] = { renderFinishedSemaphore };
+            VkSemaphore signalSemaphores[] = { frameData.renderFinishedSemaphores[currentFrame] };
             submitInfo.signalSemaphoreCount = 1;
             submitInfo.pSignalSemaphores = signalSemaphores;
 
-            if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS)
+            if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, frameData.inFlightFences[currentFrame]) != VK_SUCCESS)
             {
                 throw std::runtime_error("Failed to submit command buffer draw!");
             }
@@ -1201,6 +1223,8 @@ namespace Vigor
             presentInfo.pResults = nullptr; // specify an array of VkResult values to check for every individual swap chain if presentation was successful
 
             vkQueuePresentKHR(presentQueue, &presentInfo);
+
+            currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT; // set current frame counter to loop when max reached
         }
 
     private:
@@ -1230,14 +1254,12 @@ namespace Vigor
         VkPipeline graphicsPipeline;
 
         VkCommandPool commandPool; // allocation and memory management for command buffers
-        VkCommandBuffer commandBuffer;
-
-        VkSemaphore imageAvailableSemaphore;
-        VkSemaphore renderFinishedSemaphore;
-        VkFence inFlightFence;
 
         VkQueue presentQueue;
         VkQueue graphicsQueue;
+
+        FrameData frameData;
+        uint32_t currentFrame = 0;
 
         std::vector<VkImage> swapChainImages;
         std::vector<VkImageView> swapChainImageViews;
