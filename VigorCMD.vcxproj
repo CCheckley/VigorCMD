@@ -40,6 +40,16 @@
   <ItemGroup>
     <None Include="shaders\shadercompile.bat" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\VDefinitions.h" />
+    <ClInclude Include="include\VEngine.h" />
+    <ClInclude Include="include\VEngineTypes.h" />
+    <ClInclude Include="include\VErrors.h" />
+    <ClInclude Include="include\VFilesystem.h" />
+    <ClInclude Include="include\VShaders.h" />
+    <ClInclude Include="include\VUtilities.h" />
+    <ClInclude Include="include\VWindow.h" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
