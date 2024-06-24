@@ -59,11 +59,15 @@ namespace Vigor
 		~VEngine()
 		{
 			ShutdownWindows();
+			windows.clear();
 
 			vkDestroyDevice(vkDevice, nullptr);
-			vkDestroyInstance(vkInstance, nullptr);
 
-			windows.clear();
+#if VULKAN_VALIDATION_LAYERS_ENABLED
+			//DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr); TODO[CC]
+#endif
+
+			vkDestroyInstance(vkInstance, nullptr);
 
 			SDL_Vulkan_UnloadLibrary();
 			SDL_Quit();
@@ -82,6 +86,37 @@ namespace Vigor
 				SDL_Event windowEvent;
 				while (SDL_PollEvent(&windowEvent))
 				{
+					if (windowEvent.type == SDL_WINDOWEVENT)
+					{
+						auto const& itWindow = std::find_if(windows.begin(), windows.end(), [&windowEvent = windowEvent](std::unique_ptr<VWindow>& window) { return window->GetSDLWindowID() == windowEvent.window.windowID; });
+						if (itWindow != windows.end())
+						{
+							// Found window, do stuff
+
+							switch (windowEvent.window.event)
+							{
+							case SDL_WINDOWEVENT_CLOSE:
+								(*itWindow)->Shutdown(vkInstance, vkDevice);
+								windows.erase(itWindow);
+								break;
+							case SDL_WINDOWEVENT_MINIMIZED:
+								(*itWindow)->bIsMinimized = true;
+								break;
+							case SDL_WINDOWEVENT_RESTORED:
+								(*itWindow)->bIsMinimized = false;
+								break;
+							case SDL_WINDOWEVENT_SIZE_CHANGED:
+								(*itWindow)->FrameBufferResized(
+									windowEvent.window.data1, // width
+									windowEvent.window.data2 // height
+								);
+									break;
+							default:
+								break;
+							}
+						}
+					}
+
 					if (windowEvent.type == SDL_QUIT)
 					{
 						running = false;
@@ -92,7 +127,10 @@ namespace Vigor
 				// TODO[CC] make 1 line-r
 				for (auto& window : windows)
 				{
-					window->DrawFrame(vkDevice);
+					if (!window->bIsMinimized)
+					{
+						window->DrawFrame(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies);
+					}
 				}
 			}
 

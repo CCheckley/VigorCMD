@@ -140,11 +140,13 @@ namespace Vigor
 			, graphicsPipeline()
 			, frameData()
 		{
-			window = SDL_CreateWindow("VigorCMD", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_SHOWN | SDL_WINDOW_VULKAN);
+			window = SDL_CreateWindow("VigorCMD", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_SHOWN | SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 			if (window == nullptr)
 			{
 				throw std::runtime_error(("SDL_CreateWindow Error: %s\n\n", SDL_GetError()));
 			}
+
+			sdlWindowId = SDL_GetWindowID(window);
 		}
 
 		~VWindow()
@@ -152,34 +154,29 @@ namespace Vigor
 			SDL_DestroyWindow(window);
 		}
 
-		void Shutdown(VkInstance vkInstance, VkDevice vkDevice)
+		// Callback's
+		void FrameBufferResized(uint16_t _windowWidth, uint16_t _windowHeight)
 		{
-			frameData.Shutdown(vkDevice);
-
-			for (auto framebuffer : swapChainFramebuffers)
-			{
-				vkDestroyFramebuffer(vkDevice, framebuffer, nullptr);
-			}
-
-			vkDestroyPipeline(vkDevice, graphicsPipeline, nullptr);
-			vkDestroyPipelineLayout(vkDevice, pipelineLayout, nullptr);
-			vkDestroyRenderPass(vkDevice, renderPass, nullptr);
-
-			for (auto imageView : swapChainImageViews)
-			{
-				vkDestroyImageView(vkDevice, imageView, nullptr);
-			}
-
-			vkDestroySwapchainKHR(vkDevice, swapChain, nullptr);
-			vkDestroySurfaceKHR(vkInstance, surface, nullptr);
+			windowWidth = _windowWidth;
+			windowHeight = _windowHeight;
+			bFrameBufferResized = true;
 		}
 
+		// Getter's
 		/*
 		* Get internal SDL window ptr
 		*/
 		SDL_Window* GetSDLWindow() const
 		{
 			return window;
+		}
+
+		/*
+		* Get internal SDL window ID
+		*/
+		uint32_t GetSDLWindowID() const
+		{
+			return sdlWindowId;
 		}
 
 		/*
@@ -190,6 +187,7 @@ namespace Vigor
 			return surface;
 		}
 
+		// Initializers
 		/*
 		* Init Window VK Surface
 		*/
@@ -221,16 +219,15 @@ namespace Vigor
 				{
 					swapChainExtent = swapChainSupportDetails.capabilities.currentExtent;
 				}
-
-				int width, height;
-				SDL_Vulkan_GetDrawableSize(window, &width, &height);
-
-				// TODO - The below can be simplified
-				swapChainExtent =
+				else
 				{
-					std::clamp<uint32_t>(width, swapChainSupportDetails.capabilities.minImageExtent.width, swapChainSupportDetails.capabilities.maxImageExtent.width),
-					std::clamp<uint32_t>(height, swapChainSupportDetails.capabilities.minImageExtent.height, swapChainSupportDetails.capabilities.maxImageExtent.height)
-				};
+					int width, height;
+					SDL_Vulkan_GetDrawableSize(window, &width, &height);
+
+					// TODO - The below can be simplified
+					swapChainExtent.width = std::clamp<uint32_t>(width, swapChainSupportDetails.capabilities.minImageExtent.width, swapChainSupportDetails.capabilities.maxImageExtent.width);
+					swapChainExtent.height = std::clamp<uint32_t>(height, swapChainSupportDetails.capabilities.minImageExtent.height, swapChainSupportDetails.capabilities.maxImageExtent.height);
+				}
 			}
 
 			// Choose Swap Chain Surface Format
@@ -456,12 +453,6 @@ namespace Vigor
 			VkPipelineShaderStageCreateInfo shaderStages[] = { createInfoVertexShaderStage, createInfoPixelShaderStage };
 
 			// Dynamic State Setup
-			std::vector<VkDynamicState> dynamicStates =
-			{
-				VK_DYNAMIC_STATE_VIEWPORT,
-				VK_DYNAMIC_STATE_SCISSOR
-			};
-
 			VkPipelineDynamicStateCreateInfo createInfoDynamicState{};
 			createInfoDynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
 			createInfoDynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()); // TODO - remove cast if possible
@@ -688,19 +679,29 @@ namespace Vigor
 			frameData.Init(vkDevice, queueFamilyIndicies);
 		}
 
-		// Main
-		void DrawFrame(VkDevice vkDevice)
+		// Runtime
+		void DrawFrame(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, SwapChainSupportDetails swapChainSupportDetails, QueueFamilyIndicies queueFamilyIndicies)
 		{
 			vkWaitForFences(vkDevice, 1, &frameData.inFlightFences[currentFrame], VK_TRUE, UINT64_MAX); // wait for previous frame to finish
-			vkResetFences(vkDevice, 1, &frameData.inFlightFences[currentFrame]);
 
 			// TODO
 			uint32_t imageIdx = 0;
-			vkAcquireNextImageKHR(vkDevice, swapChain, UINT64_MAX, frameData.imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIdx);
+			VkResult aquireNextImageRes = vkAcquireNextImageKHR(vkDevice, swapChain, UINT64_MAX, frameData.imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIdx);
 
-			vkResetCommandBuffer(frameData.commandBuffers[currentFrame], 0);
+			if (aquireNextImageRes == VK_ERROR_OUT_OF_DATE_KHR)
+			{
+				ReInitSwapChain(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies);
+				return;
+			}
+			else if (aquireNextImageRes != VK_SUCCESS)
+			{
+				throw std::runtime_error("Failed to acquire swap chain image!");
+			}
 
-			VkCommandBuffer commandBuffer = frameData.commandBuffers[currentFrame];
+			vkResetFences(vkDevice, 1, &frameData.inFlightFences[currentFrame]);
+
+			VkCommandBuffer& commandBuffer = frameData.commandBuffers[currentFrame];
+			vkResetCommandBuffer(commandBuffer, 0);
 
 			// Record Command Buffer
 			{
@@ -735,8 +736,8 @@ namespace Vigor
 				VkViewport viewport{};
 				viewport.x = 0.0f;
 				viewport.y = 0.0f;
-				viewport.width = static_cast<float>(swapChainExtent.width);
-				viewport.height = static_cast<float>(swapChainExtent.height);
+				viewport.width = (float)(swapChainExtent.width);
+				viewport.height = (float)(swapChainExtent.height);
 				viewport.minDepth = 0.0f;
 				viewport.maxDepth = 1.0f;
 				vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
@@ -798,18 +799,82 @@ namespace Vigor
 
 			presentInfo.pResults = nullptr; // specify an array of VkResult values to check for every individual swap chain if presentation was successful
 
-			vkQueuePresentKHR(presentQueue, &presentInfo);
+			VkResult presentResult = vkQueuePresentKHR(presentQueue, &presentInfo);
+			if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR || bFrameBufferResized)
+			{
+				bFrameBufferResized = false;
+				ReInitSwapChain(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies);
+			}
+			else if (presentResult != VK_SUCCESS)
+			{
+				throw std::runtime_error("Failed to acquire swap chain image!");
+			}
 
 			currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT; // set current frame counter to loop when max reached
 		}
 
+		// Shutdown
+		void Shutdown(VkInstance vkInstance, VkDevice vkDevice)
+		{
+			ShutdownSwapChain(vkDevice);
+
+			vkDestroyPipeline(vkDevice, graphicsPipeline, nullptr);
+			vkDestroyPipelineLayout(vkDevice, pipelineLayout, nullptr);
+			vkDestroyRenderPass(vkDevice, renderPass, nullptr);
+
+			frameData.Shutdown(vkDevice);
+
+			vkDestroySurfaceKHR(vkInstance, surface, nullptr);
+		}
+
+		void ShutdownSwapChain(VkDevice vkDevice)
+		{
+			for (auto framebuffer : swapChainFramebuffers)
+			{
+				vkDestroyFramebuffer(vkDevice, framebuffer, nullptr);
+			}
+
+			for (auto imageView : swapChainImageViews)
+			{
+				vkDestroyImageView(vkDevice, imageView, nullptr);
+			}
+
+			vkDestroySwapchainKHR(vkDevice, swapChain, nullptr);
+		}
+
 	private:
+		/*
+		* Re-initialize swapchains for events that invalidate them like window resize
+		*/
+		void ReInitSwapChain(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, SwapChainSupportDetails swapChainSupportDetails, QueueFamilyIndicies queueFamilyIndicies)
+		{
+			/* !! NOTE !!
+			* we don't recreate the renderpass here for simplicity.
+			* it can be possible for the swap chain image format to change during an applications' lifetime
+			* e.g. when moving a window from an standard range to an high dynamic range monitor.
+			* This may require the application to recreate the renderpass to make sure the change
+			* 	between dynamic ranges is properly reflected.
+			*/
+
+			vkDeviceWaitIdle(vkDevice);
+
+			ShutdownSwapChain(vkDevice);
+
+			InitSwapChain(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies);
+			InitImageViews(vkDevice);
+			InitFrameBuffers(vkDevice);
+		}
+
+	public:
 		// Window Settings
 		// TODO - are these better off as bitfields?
 		bool bHasMouseFocus = false;
 		bool bHasKeyboardFocus = false;
 		bool bIsFullscreen = false;
 		bool bIsMinimized = false;
+
+	private:
+		uint32_t sdlWindowId = 0;
 
 		uint16_t windowWidth = 320;
 		uint16_t windowHeight = 240;
@@ -841,5 +906,9 @@ namespace Vigor
 		// Frame Data - TODO[CC] Enable multiple
 		FrameData frameData;
 		uint32_t currentFrame = 0;
+		bool bFrameBufferResized = false;
+
+		// Dynamic states for window
+		std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
 	};
 }
