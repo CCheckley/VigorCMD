@@ -26,28 +26,6 @@ namespace Vigor
 
 		}
 
-		void Init(VkDevice vkDevice, QueueFamilyIndicies queueFamilyIndicies)
-		{
-			InitCommandPool(vkDevice, queueFamilyIndicies);
-
-			InitCommandBuffers(vkDevice);
-
-			InitSyncObjects(vkDevice);
-		}
-
-		void Shutdown(VkDevice vkDevice)
-		{
-			for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-			{
-				vkDestroySemaphore(vkDevice, imageAvailableSemaphores[i], nullptr);
-				vkDestroySemaphore(vkDevice, renderFinishedSemaphores[i], nullptr);
-				vkDestroyFence(vkDevice, inFlightFences[i], nullptr);
-			}
-
-			vkDestroyCommandPool(vkDevice, commandPool, nullptr);
-		}
-
-	private:
 		void InitCommandPool(VkDevice vkDevice, QueueFamilyIndicies queueFamilyIndicies)
 		{
 			VkCommandPoolCreateInfo createInfoCommandPool{};
@@ -111,13 +89,27 @@ namespace Vigor
 			}
 		}
 
-	public:
+		void Shutdown(VkDevice vkDevice)
+		{
+			for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+			{
+				vkDestroySemaphore(vkDevice, imageAvailableSemaphores[i], nullptr);
+				vkDestroySemaphore(vkDevice, renderFinishedSemaphores[i], nullptr);
+				vkDestroyFence(vkDevice, inFlightFences[i], nullptr);
+			}
+
+			vkDestroyCommandPool(vkDevice, commandPool, nullptr);
+		}
+
+	private:
 		VkCommandPool commandPool; // allocation and memory management for command buffers
 		std::vector<VkCommandBuffer> commandBuffers;
 
 		std::vector<VkSemaphore> imageAvailableSemaphores;
 		std::vector<VkSemaphore> renderFinishedSemaphores;
 		std::vector<VkFence> inFlightFences;
+
+		friend class VWindow;
 	};
 
 	class VWindow
@@ -185,6 +177,14 @@ namespace Vigor
 		VkSurfaceKHR& GetSurface()
 		{
 			return surface;
+		}
+
+		/*
+		* Getter for frame data
+		*/
+		FrameData& GetFrameData()
+		{
+			return frameData;
 		}
 
 		// Initializers
@@ -458,13 +458,17 @@ namespace Vigor
 			createInfoDynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()); // TODO - remove cast if possible
 			createInfoDynamicState.pDynamicStates = dynamicStates.data();
 
+			// Get Vertex structure values
+			auto bindingDescription = Vertex::GetBindingDescription();
+			auto attributeDescriptions = Vertex::GetAttributeDescriptions();
+
 			// Vertex Input
 			VkPipelineVertexInputStateCreateInfo createInfoVertexInput{};
 			createInfoVertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-			createInfoVertexInput.vertexBindingDescriptionCount = 0; // not currently sending a vertex buffer
-			createInfoVertexInput.pVertexBindingDescriptions = nullptr;
-			createInfoVertexInput.vertexAttributeDescriptionCount = 0; // not currently sending a vertex buffer
-			createInfoVertexInput.pVertexAttributeDescriptions = nullptr;
+			createInfoVertexInput.vertexBindingDescriptionCount = 1;
+			createInfoVertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+			createInfoVertexInput.pVertexBindingDescriptions = &bindingDescription;
+			createInfoVertexInput.pVertexAttributeDescriptions = attributeDescriptions.data();
 
 			// Input Assembly
 			VkPipelineInputAssemblyStateCreateInfo createInfoInputAssembly{};
@@ -672,11 +676,80 @@ namespace Vigor
 		}
 
 		/*
-		* Initialize Frame Data - TODO[CC] - Enable Multiple
+		* Initialize Vertex Buffer
 		*/
-		void InitFrameData(VkDevice vkDevice, QueueFamilyIndicies queueFamilyIndicies)
+		void InitVertexBuffer(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
 		{
-			frameData.Init(vkDevice, queueFamilyIndicies);
+			VkBufferCreateInfo createInfoBuffer{};
+			createInfoBuffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+			createInfoBuffer.size = sizeof(vertices[0]) * vertices.size();
+			createInfoBuffer.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+			createInfoBuffer.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+			if (vkCreateBuffer(vkDevice, &createInfoBuffer, nullptr, &vkVertexBuffer) != VK_SUCCESS)
+			{
+				throw std::runtime_error("Failed to create vertex buffer!");
+			}
+
+			VkMemoryRequirements memoryRequirements;
+			vkGetBufferMemoryRequirements(vkDevice, vkVertexBuffer, &memoryRequirements);
+
+			auto findMemoryType = [vkPhysicalDevice, &vkVertexBuffer = vkVertexBuffer](uint32_t typeFilter, VkMemoryPropertyFlags memoryPropertyFlags)
+				{
+					/*
+					* The VkPhysicalDeviceMemoryProperties structure has two arrays memoryTypes and memoryHeaps.
+					* Memory heaps are distinct memory resources like dedicated VRAM and swap space in RAM for when
+					*		VRAM runs out
+					*/
+					VkPhysicalDeviceMemoryProperties physicalDeviceMemoryProperties;
+					vkGetPhysicalDeviceMemoryProperties(vkPhysicalDevice, &physicalDeviceMemoryProperties);
+
+					for (uint32_t i = 0; i < physicalDeviceMemoryProperties.memoryTypeCount; i++)
+					{
+						if (
+							(typeFilter & (1 << i)) && // check available memory type idx against filter
+							(physicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & memoryPropertyFlags))
+						{
+							return i;
+						}
+					}
+
+					throw std::runtime_error("Failed to find suitable memory type!");
+				};
+
+			VkMemoryAllocateInfo memoryAllocateInfo{};
+			memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+			memoryAllocateInfo.allocationSize = memoryRequirements.size;
+			memoryAllocateInfo.memoryTypeIndex = findMemoryType
+			(
+				memoryRequirements.memoryTypeBits,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+			);
+
+			if (vkAllocateMemory(vkDevice, &memoryAllocateInfo, nullptr, &vkVertexBufferMemory) != VK_SUCCESS)
+			{
+				throw std::runtime_error("Failed to allocate vertex buffer memory!");
+			}
+
+			vkBindBufferMemory(vkDevice, vkVertexBuffer, vkVertexBufferMemory, 0); // bind allocated memory
+
+			// MAP BUFFER MEMORY
+
+			/*
+			* Unfortunately the driver may not immediately copy the data into the buffer memory,
+			*	for example because of caching. It is also possible that writes to the buffer are not
+			*	visible in the mapped memory yet. There are two ways to deal with that problem:
+			*
+			*		- Use a memory heap that is host coherent, indicated with VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+			*		- Call vkFlushMappedMemoryRanges after writing to the mapped memory,
+			*			and call vkInvalidateMappedMemoryRanges before reading from the mapped memory
+			*
+			* Chosen approach below uses first method, may lead to slightly worse performance than explicit flushing
+			*/
+			void* bufferData;
+			vkMapMemory(vkDevice, vkVertexBufferMemory, 0, createInfoBuffer.size, 0, &bufferData);
+			memcpy(bufferData, vertices.data(), (size_t)createInfoBuffer.size);
+			vkUnmapMemory(vkDevice, vkVertexBufferMemory);
 		}
 
 		// Runtime
@@ -733,6 +806,12 @@ namespace Vigor
 
 				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
+				// Bind Vertex Buffers
+				VkBuffer vertexBuffers[] = { vkVertexBuffer };
+				VkDeviceSize offsets[] = { 0 };
+				vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+
+				// Setup viewport dynamic
 				VkViewport viewport{};
 				viewport.x = 0.0f;
 				viewport.y = 0.0f;
@@ -742,6 +821,7 @@ namespace Vigor
 				viewport.maxDepth = 1.0f;
 				vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 
+				// Setup scissor dynamic
 				VkRect2D scissor{};
 				scissor.offset = { 0, 0 };
 				scissor.extent = swapChainExtent;
@@ -817,6 +897,9 @@ namespace Vigor
 		void Shutdown(VkInstance vkInstance, VkDevice vkDevice)
 		{
 			ShutdownSwapChain(vkDevice);
+
+			vkDestroyBuffer(vkDevice, vkVertexBuffer, nullptr);
+			vkFreeMemory(vkDevice, vkVertexBufferMemory, nullptr);
 
 			vkDestroyPipeline(vkDevice, graphicsPipeline, nullptr);
 			vkDestroyPipelineLayout(vkDevice, pipelineLayout, nullptr);
@@ -910,5 +993,17 @@ namespace Vigor
 
 		// Dynamic states for window
 		std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+
+		// TODO[CC] these are here for in-dev, create functionality to collect verts and attr's from "imported" meshes etc. for the scene to display
+		const std::vector<Vertex> vertices =
+		{
+			{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+			{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+			{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+		};
+
+		// TODO[CC] support multiple
+		VkBuffer vkVertexBuffer;
+		VkDeviceMemory vkVertexBufferMemory;
 	};
 }

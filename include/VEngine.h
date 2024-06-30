@@ -53,7 +53,15 @@ namespace Vigor
 
 			InitFrameBuffers();
 
-			InitFrameData();
+			// Handle Frame Data
+			for (auto& window : windows)
+			{
+				FrameData& frameData = window->GetFrameData();
+				frameData.InitCommandPool(vkDevice, queueFamilyIndicies);
+				window->InitVertexBuffer(vkDevice, vkPhysicalDevice); // HANDLE VERTEX BUFFER INIT
+				frameData.InitCommandBuffers(vkDevice);
+				frameData.InitSyncObjects(vkDevice);
+			}
 		}
 
 		~VEngine()
@@ -467,15 +475,6 @@ namespace Vigor
 			for (auto& window : windows)
 			{
 				window->InitFrameBuffers(vkDevice);
-			}
-		}
-
-		void InitFrameData()
-		{
-			// TODO[CC] make 1 line-r
-			for (auto& window : windows)
-			{
-				window->InitFrameData(vkDevice, queueFamilyIndicies);
 			}
 		}
 
