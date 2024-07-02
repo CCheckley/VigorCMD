@@ -19,6 +19,7 @@ namespace Vigor
 		FrameData()
 			: commandPool()
 			, commandBuffers()
+			, commandPoolTransient()
 			, imageAvailableSemaphores()
 			, renderFinishedSemaphores()
 			, inFlightFences()
@@ -54,6 +55,21 @@ namespace Vigor
 			if (vkAllocateCommandBuffers(vkDevice, &allocInfoCommandBuffer, commandBuffers.data()) != VK_SUCCESS)
 			{
 				throw std::runtime_error("Failed to allocate command buffers!");
+			}
+		}
+
+		void InitCommandPoolTransient(VkDevice vkDevice, QueueFamilyIndicies queueFamilyIndicies)
+		{
+			VkCommandPoolCreateInfo createInfoCommandPool{};
+			createInfoCommandPool.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+			createInfoCommandPool.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+			createInfoCommandPool.queueFamilyIndex = queueFamilyIndicies.graphicsFamily.value();
+
+			VkResult createCommandPoolRes = vkCreateCommandPool(vkDevice, &createInfoCommandPool, nullptr, &commandPoolTransient);
+			if (createCommandPoolRes != VK_SUCCESS)
+			{
+				std::string errorMsg = std::format("Failed to create command pool transient Error: {}\n\n", (int)createCommandPoolRes);
+				throw std::runtime_error(errorMsg);
 			}
 		}
 
@@ -99,11 +115,14 @@ namespace Vigor
 			}
 
 			vkDestroyCommandPool(vkDevice, commandPool, nullptr);
+			vkDestroyCommandPool(vkDevice, commandPoolTransient, nullptr);
 		}
 
 	private:
 		VkCommandPool commandPool; // allocation and memory management for command buffers
 		std::vector<VkCommandBuffer> commandBuffers;
+
+		VkCommandPool commandPoolTransient; // allocation and memory management for command buffers
 
 		std::vector<VkSemaphore> imageAvailableSemaphores;
 		std::vector<VkSemaphore> renderFinishedSemaphores;
@@ -676,25 +695,25 @@ namespace Vigor
 		}
 
 		/*
-		* Initialize Vertex Buffer
+		* Generic buffer initialization
 		*/
-		void InitVertexBuffer(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		static void InitBuffer(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryPropertyFlags, VkBuffer& buffer, VkDeviceMemory& bufferMemory)
 		{
 			VkBufferCreateInfo createInfoBuffer{};
 			createInfoBuffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-			createInfoBuffer.size = sizeof(vertices[0]) * vertices.size();
-			createInfoBuffer.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+			createInfoBuffer.size = size;
+			createInfoBuffer.usage = usage;
 			createInfoBuffer.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-			if (vkCreateBuffer(vkDevice, &createInfoBuffer, nullptr, &vkVertexBuffer) != VK_SUCCESS)
+			if (vkCreateBuffer(vkDevice, &createInfoBuffer, nullptr, &buffer) != VK_SUCCESS)
 			{
 				throw std::runtime_error("Failed to create vertex buffer!");
 			}
 
 			VkMemoryRequirements memoryRequirements;
-			vkGetBufferMemoryRequirements(vkDevice, vkVertexBuffer, &memoryRequirements);
+			vkGetBufferMemoryRequirements(vkDevice, buffer, &memoryRequirements);
 
-			auto findMemoryType = [vkPhysicalDevice, &vkVertexBuffer = vkVertexBuffer](uint32_t typeFilter, VkMemoryPropertyFlags memoryPropertyFlags)
+			auto findMemoryType = [vkPhysicalDevice, &buffer = buffer](uint32_t typeFilter, VkMemoryPropertyFlags memoryPropertyFlags)
 				{
 					/*
 					* The VkPhysicalDeviceMemoryProperties structure has two arrays memoryTypes and memoryHeaps.
@@ -723,15 +742,36 @@ namespace Vigor
 			memoryAllocateInfo.memoryTypeIndex = findMemoryType
 			(
 				memoryRequirements.memoryTypeBits,
-				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+				memoryPropertyFlags
 			);
 
-			if (vkAllocateMemory(vkDevice, &memoryAllocateInfo, nullptr, &vkVertexBufferMemory) != VK_SUCCESS)
+			if (vkAllocateMemory(vkDevice, &memoryAllocateInfo, nullptr, &bufferMemory) != VK_SUCCESS)
 			{
 				throw std::runtime_error("Failed to allocate vertex buffer memory!");
 			}
 
-			vkBindBufferMemory(vkDevice, vkVertexBuffer, vkVertexBufferMemory, 0); // bind allocated memory
+			vkBindBufferMemory(vkDevice, buffer, bufferMemory, 0); // bind allocated memory
+		}
+
+		/*
+		* Initialize Vertex Buffer
+		*/
+		void InitVertexBuffer(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		{
+			VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+
+			// Staging buffer which can have data accessable via CPU
+			VkBuffer stagingBuffer;
+			VkDeviceMemory stagingBufferMemory;
+			InitBuffer(
+				vkDevice,
+				vkPhysicalDevice,
+				bufferSize,
+				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				stagingBuffer,
+				stagingBufferMemory
+			);
 
 			// MAP BUFFER MEMORY
 
@@ -747,9 +787,27 @@ namespace Vigor
 			* Chosen approach below uses first method, may lead to slightly worse performance than explicit flushing
 			*/
 			void* bufferData;
-			vkMapMemory(vkDevice, vkVertexBufferMemory, 0, createInfoBuffer.size, 0, &bufferData);
-			memcpy(bufferData, vertices.data(), (size_t)createInfoBuffer.size);
-			vkUnmapMemory(vkDevice, vkVertexBufferMemory);
+			vkMapMemory(vkDevice, stagingBufferMemory, 0, bufferSize, 0, &bufferData);
+			memcpy(bufferData, vertices.data(), (size_t)bufferSize);
+			vkUnmapMemory(vkDevice, stagingBufferMemory);
+
+			// Vertex buffer where its memory is GPU only and updated via the staging buffer
+			InitBuffer(
+				vkDevice,
+				vkPhysicalDevice,
+				bufferSize,
+				VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				vkVertexBuffer,
+				vkVertexBufferMemory
+			);
+
+			// transfer from staging over to gpu vertex buffer
+			CopyBufferData(vkDevice, stagingBuffer, vkVertexBuffer, bufferSize);
+
+			// cleanup staging buffer
+			vkDestroyBuffer(vkDevice, stagingBuffer, nullptr);
+			vkFreeMemory(vkDevice, stagingBufferMemory, nullptr);
 		}
 
 		// Runtime
@@ -893,6 +951,51 @@ namespace Vigor
 			currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT; // set current frame counter to loop when max reached
 		}
 
+		void CopyBufferData(VkDevice vkDevice, VkBuffer srcBuff, VkBuffer dstBuff, VkDeviceSize size)
+		{
+			VkCommandBufferAllocateInfo allocInfoCommandBuffer{};
+			allocInfoCommandBuffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+			allocInfoCommandBuffer.commandPool = frameData.commandPoolTransient;
+			allocInfoCommandBuffer.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // primary can be submitted but not called from other buffers, secondary cannot be submitted but can be called from others
+			allocInfoCommandBuffer.commandBufferCount = 1;
+
+			VkCommandBuffer copyCommandBuffer;
+			if (vkAllocateCommandBuffers(vkDevice, &allocInfoCommandBuffer, &copyCommandBuffer) != VK_SUCCESS)
+			{
+				throw std::runtime_error("Failed to allocate command buffers transient!");
+			}
+
+			VkCommandBufferBeginInfo beginInfoCommandBuffer{};
+			beginInfoCommandBuffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+			beginInfoCommandBuffer.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+			vkBeginCommandBuffer(copyCommandBuffer, &beginInfoCommandBuffer);
+
+			// Do the copy
+			VkBufferCopy copyBufferRegion{};
+			copyBufferRegion.srcOffset = 0; // Optional
+			copyBufferRegion.dstOffset = 0; // Optional
+			copyBufferRegion.size = size;
+			vkCmdCopyBuffer(copyCommandBuffer, srcBuff, dstBuff, 1, &copyBufferRegion);
+
+			vkEndCommandBuffer(copyCommandBuffer);
+
+			VkSubmitInfo submitInfo{};
+			submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+			submitInfo.commandBufferCount = 1;
+			submitInfo.pCommandBuffers = &copyCommandBuffer;
+
+			vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+			/*
+			* two possible ways to wait on this transfer to complete. We could use a fence and wait with vkWaitForFences, 
+			*	or simply wait for the transfer queue to become idle with vkQueueWaitIdle. A fence would allow you to schedule
+			*	multiple transfers simultaneously and wait for all of them complete, instead of executing one at a time.
+			*	That may give the driver more opportunities to optimize.
+			*/
+			vkQueueWaitIdle(graphicsQueue);
+			vkFreeCommandBuffers(vkDevice, frameData.commandPoolTransient, 1, &copyCommandBuffer);
+		}
+
 		// Shutdown
 		void Shutdown(VkInstance vkInstance, VkDevice vkDevice)
 		{
@@ -1005,5 +1108,13 @@ namespace Vigor
 		// TODO[CC] support multiple
 		VkBuffer vkVertexBuffer;
 		VkDeviceMemory vkVertexBufferMemory;
+		/* !! NOTE !!
+		* the memory type that allows us to access it from the CPU may not be the most optimal memory type for the graphics card
+		*	to read from. The most optimal memory has the VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT flag and is usually not accessible 
+		*	by the CPU on dedicated graphics cards. In this chapter we're going to create two vertex buffers.
+		*	One staging buffer in CPU accessible memory to upload the data from the vertex array to, and the final vertex buffer 
+		*	in device local memory. We'll then use a buffer copy command to move the data from the staging buffer to the actual 
+		*	vertex buffer.
+		*/
 	};
 }
