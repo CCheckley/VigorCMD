@@ -810,6 +810,48 @@ namespace Vigor
 			vkFreeMemory(vkDevice, stagingBufferMemory, nullptr);
 		}
 
+		/*
+		* Initialize Index Buffer
+		*/
+		void InitIndexBuffer(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		{
+			VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+			VkBuffer stagingBuffer;
+			VkDeviceMemory stagingBufferMemory;
+			InitBuffer
+			(
+				vkDevice,
+				vkPhysicalDevice,
+				bufferSize,
+				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				stagingBuffer,
+				stagingBufferMemory
+			);
+
+			void* data;
+			vkMapMemory(vkDevice, stagingBufferMemory, 0, bufferSize, 0, &data);
+			memcpy(data, indices.data(), (size_t)bufferSize);
+			vkUnmapMemory(vkDevice, stagingBufferMemory);
+
+			InitBuffer
+			(
+				vkDevice,
+				vkPhysicalDevice,
+				bufferSize,
+				VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				vkIndexBuffer,
+				vkIndexBufferMemory
+			);
+
+			CopyBufferData(vkDevice, stagingBuffer, vkIndexBuffer, bufferSize);
+
+			vkDestroyBuffer(vkDevice, stagingBuffer, nullptr);
+			vkFreeMemory(vkDevice, stagingBufferMemory, nullptr);
+		}
+
 		// Runtime
 		void DrawFrame(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, SwapChainSupportDetails swapChainSupportDetails, QueueFamilyIndicies queueFamilyIndicies)
 		{
@@ -867,7 +909,9 @@ namespace Vigor
 				// Bind Vertex Buffers
 				VkBuffer vertexBuffers[] = { vkVertexBuffer };
 				VkDeviceSize offsets[] = { 0 };
+
 				vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+				vkCmdBindIndexBuffer(commandBuffer, vkIndexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
 				// Setup viewport dynamic
 				VkViewport viewport{};
@@ -885,13 +929,14 @@ namespace Vigor
 				scissor.extent = swapChainExtent;
 				vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-				vkCmdDraw
+				vkCmdDrawIndexed
 				(
 					commandBuffer,
-					3, // vertexCount
-					1, // instanceCount
-					0, // firstVertex
-					0 // firstInstance
+					static_cast<uint32_t>(indices.size()), // idx count
+					1, // instance count
+					0, // first idx
+					0, // vert offset
+					0 // first instance
 				);
 
 				vkCmdEndRenderPass(commandBuffer);
@@ -1001,6 +1046,9 @@ namespace Vigor
 		{
 			ShutdownSwapChain(vkDevice);
 
+			vkDestroyBuffer(vkDevice, vkIndexBuffer, nullptr);
+			vkFreeMemory(vkDevice, vkIndexBufferMemory, nullptr);
+
 			vkDestroyBuffer(vkDevice, vkVertexBuffer, nullptr);
 			vkFreeMemory(vkDevice, vkVertexBufferMemory, nullptr);
 
@@ -1100,14 +1148,24 @@ namespace Vigor
 		// TODO[CC] these are here for in-dev, create functionality to collect verts and attr's from "imported" meshes etc. for the scene to display
 		const std::vector<Vertex> vertices =
 		{
-			{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-			{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-			{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+			{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+			{{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+			{{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+			{{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+		};
+
+		// contents of index buffer
+		const std::vector<uint16_t> indices = 
+		{
+			0, 1, 2, 2, 3, 0
 		};
 
 		// TODO[CC] support multiple
 		VkBuffer vkVertexBuffer;
 		VkDeviceMemory vkVertexBufferMemory;
+
+		VkBuffer vkIndexBuffer;
+		VkDeviceMemory vkIndexBufferMemory;
 		/* !! NOTE !!
 		* the memory type that allows us to access it from the CPU may not be the most optimal memory type for the graphics card
 		*	to read from. The most optimal memory has the VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT flag and is usually not accessible 
