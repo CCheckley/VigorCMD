@@ -29,6 +29,8 @@ namespace Vigor
 		VEngine(uint8_t _windowCount = 1)
 			: windowCount(_windowCount)
 		{
+			// TODO[CC] Initialize with delegates for more elegant setup
+
 			InitSDL();
 
 			InitWindows();
@@ -49,6 +51,11 @@ namespace Vigor
 
 			InitRenderPasses();
 
+			for (auto& window : windows)
+			{
+				window->InitDescriptorSetLayout(vkDevice);
+			}
+
 			InitGraphicsPipelineAndLayoutAndShaderModules();
 
 			InitFrameBuffers();
@@ -61,6 +68,7 @@ namespace Vigor
 				frameData.InitCommandPoolTransient(vkDevice, queueFamilyIndicies);
 				window->InitVertexBuffer(vkDevice, vkPhysicalDevice); // HANDLE VERTEX BUFFER INIT
 				window->InitIndexBuffer(vkDevice, vkPhysicalDevice); // HANDLE INDEX BUFFER INIT
+				window->InitConstantBuffers(vkDevice, vkPhysicalDevice);
 				frameData.InitCommandBuffers(vkDevice);
 				frameData.InitSyncObjects(vkDevice);
 			}

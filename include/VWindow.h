@@ -1,9 +1,14 @@
 #pragma once
 
+#include <chrono>
 #include <algorithm>
 #include <stdexcept>
 
 #include <SDL.h>
+
+#define GLM_FORCE_RADIANS
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include "VShaders.h"
 #include "VFilesystem.h"
@@ -12,6 +17,13 @@
 namespace Vigor
 {
 	constexpr uint8_t MAX_FRAMES_IN_FLIGHT = 3;
+
+	struct ModelViewProjectionBuffer
+	{
+		glm::mat4x4 Model;
+		glm::mat4x4 View;
+		glm::mat4x4 Projection;
+	};
 
 	class FrameData
 	{
@@ -446,6 +458,29 @@ namespace Vigor
 		}
 
 		/*
+		* Initialize Descriptor Set And Layout
+		*/
+		void InitDescriptorSetLayout(VkDevice vkDevice)
+		{
+			VkDescriptorSetLayoutBinding mvpBufferLayoutBinding{};
+			mvpBufferLayoutBinding.binding = 0;
+			mvpBufferLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			mvpBufferLayoutBinding.descriptorCount = 1;
+			mvpBufferLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+			mvpBufferLayoutBinding.pImmutableSamplers = nullptr;
+
+			VkDescriptorSetLayoutCreateInfo createInfoDescriptorSetLayout{};
+			createInfoDescriptorSetLayout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+			createInfoDescriptorSetLayout.bindingCount = 1;
+			createInfoDescriptorSetLayout.pBindings = &mvpBufferLayoutBinding;
+
+			if (vkCreateDescriptorSetLayout(vkDevice, &createInfoDescriptorSetLayout, nullptr, &descriptorSetLayout) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to create descriptor set layout!");
+			}
+		}
+
+		/*
 		* Initialize Graphics Pipeline And Layou And Shader Modules
 		*/
 		void InitGraphicsPipelineAndLayoutAndShaderModules(VkDevice vkDevice) // TODO[CC] - split this up
@@ -621,8 +656,8 @@ namespace Vigor
 			// Pipeline Layout - empty for now, need to specificy uniforms here when used
 			VkPipelineLayoutCreateInfo createInfoPipelineLayout{};
 			createInfoPipelineLayout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-			createInfoPipelineLayout.setLayoutCount = 0; // Optional
-			createInfoPipelineLayout.pSetLayouts = nullptr; // Optional
+			createInfoPipelineLayout.setLayoutCount = 1;
+			createInfoPipelineLayout.pSetLayouts = &descriptorSetLayout;
 			createInfoPipelineLayout.pushConstantRangeCount = 0; // Optional
 			createInfoPipelineLayout.pPushConstantRanges = nullptr; // Optional
 
@@ -852,6 +887,33 @@ namespace Vigor
 			vkFreeMemory(vkDevice, stagingBufferMemory, nullptr);
 		}
 
+		/*
+		* Initialize Constant Buffers
+		*/
+		void InitConstantBuffers(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		{
+			VkDeviceSize bufferSize = sizeof(ModelViewProjectionBuffer);
+
+			constantBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+			constantBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+			constantBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+
+			for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+			{
+				InitBuffer
+				(
+					vkDevice,
+					vkPhysicalDevice,
+					bufferSize,
+					VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+					constantBuffers[i],
+					constantBuffersMemory[i]
+				);
+				vkMapMemory(vkDevice, constantBuffersMemory[i], 0, bufferSize, 0, &constantBuffersMapped[i]);
+			}
+		}
+
 		// Runtime
 		void DrawFrame(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, SwapChainSupportDetails swapChainSupportDetails, QueueFamilyIndicies queueFamilyIndicies)
 		{
@@ -949,6 +1011,8 @@ namespace Vigor
 				}
 			}
 
+			UpdateConstantBuffer(currentFrame);
+
 			VkSubmitInfo submitInfo{};
 			submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
@@ -1032,7 +1096,7 @@ namespace Vigor
 
 			vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
 			/*
-			* two possible ways to wait on this transfer to complete. We could use a fence and wait with vkWaitForFences, 
+			* two possible ways to wait on this transfer to complete. We could use a fence and wait with vkWaitForFences,
 			*	or simply wait for the transfer queue to become idle with vkQueueWaitIdle. A fence would allow you to schedule
 			*	multiple transfers simultaneously and wait for all of them complete, instead of executing one at a time.
 			*	That may give the driver more opportunities to optimize.
@@ -1041,10 +1105,38 @@ namespace Vigor
 			vkFreeCommandBuffers(vkDevice, frameData.commandPoolTransient, 1, &copyCommandBuffer);
 		}
 
+		void UpdateConstantBuffer(uint32_t currentFrame)
+		{
+			static auto startTime = std::chrono::high_resolution_clock::now();
+
+			auto currentTime = std::chrono::high_resolution_clock::now();
+			float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+			ModelViewProjectionBuffer mvpBuffer{};
+			mvpBuffer.Model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+			mvpBuffer.View = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+			mvpBuffer.Projection = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 10.0f);
+
+			// adjust clip co-ordinates
+			mvpBuffer.Projection[1][1] *= -1;
+
+			memcpy(constantBuffersMapped[currentFrame], &mvpBuffer, sizeof(mvpBuffer));
+		}
+
 		// Shutdown
 		void Shutdown(VkInstance vkInstance, VkDevice vkDevice)
 		{
 			ShutdownSwapChain(vkDevice);
+
+			for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+			{
+				vkDestroyBuffer(vkDevice, constantBuffers[i], nullptr);
+				vkFreeMemory(vkDevice, constantBuffersMemory[i], nullptr);
+			}
+
+			vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout, nullptr);
 
 			vkDestroyBuffer(vkDevice, vkIndexBuffer, nullptr);
 			vkFreeMemory(vkDevice, vkIndexBufferMemory, nullptr);
@@ -1137,6 +1229,8 @@ namespace Vigor
 		VkPipeline graphicsPipeline;
 		VkPipelineLayout pipelineLayout;
 
+		VkDescriptorSetLayout descriptorSetLayout;
+
 		// Frame Data - TODO[CC] Enable multiple
 		FrameData frameData;
 		uint32_t currentFrame = 0;
@@ -1155,7 +1249,7 @@ namespace Vigor
 		};
 
 		// contents of index buffer
-		const std::vector<uint16_t> indices = 
+		const std::vector<uint16_t> indices =
 		{
 			0, 1, 2, 2, 3, 0
 		};
@@ -1168,11 +1262,15 @@ namespace Vigor
 		VkDeviceMemory vkIndexBufferMemory;
 		/* !! NOTE !!
 		* the memory type that allows us to access it from the CPU may not be the most optimal memory type for the graphics card
-		*	to read from. The most optimal memory has the VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT flag and is usually not accessible 
+		*	to read from. The most optimal memory has the VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT flag and is usually not accessible
 		*	by the CPU on dedicated graphics cards. In this chapter we're going to create two vertex buffers.
-		*	One staging buffer in CPU accessible memory to upload the data from the vertex array to, and the final vertex buffer 
-		*	in device local memory. We'll then use a buffer copy command to move the data from the staging buffer to the actual 
+		*	One staging buffer in CPU accessible memory to upload the data from the vertex array to, and the final vertex buffer
+		*	in device local memory. We'll then use a buffer copy command to move the data from the staging buffer to the actual
 		*	vertex buffer.
 		*/
+
+		std::vector<VkBuffer> constantBuffers;
+		std::vector<VkDeviceMemory> constantBuffersMemory;
+		std::vector<void*> constantBuffersMapped;
 	};
 }
