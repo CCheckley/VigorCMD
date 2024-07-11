@@ -1,4 +1,6 @@
 ﻿FXC : warning : no output provided for debug - embedding PDB in shader container.  Use -Qembed_debug to silence this warning.
   
+FXC : warning : no output provided for debug - embedding PDB in shader container.  Use -Qembed_debug to silence this warning.
+  
   main.cpp
   VigorCMD.vcxproj -> E:\repos\VigorCMD\x64\Debug\VigorCMD.exe

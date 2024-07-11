@@ -20,13 +20,11 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <FxCompile Include="shaders\vertex\TriVS.hlsl" />
-    <FxCompile Include="shaders\pixel\TriPS.hlsl" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="shaders\shadercompile.bat">
+    <None Include="shaders\glsl\shadercompile.bat">
       <Filter>Source Files</Filter>
     </None>
+    <None Include="shaders\glsl\fragment\shader.frag" />
+    <None Include="shaders\glsl\vertex\shader.vert" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\VWindow.h">

@@ -68,7 +68,9 @@ namespace Vigor
 				frameData.InitCommandPoolTransient(vkDevice, queueFamilyIndicies);
 				window->InitVertexBuffer(vkDevice, vkPhysicalDevice); // HANDLE VERTEX BUFFER INIT
 				window->InitIndexBuffer(vkDevice, vkPhysicalDevice); // HANDLE INDEX BUFFER INIT
-				window->InitConstantBuffers(vkDevice, vkPhysicalDevice);
+				window->InitUniformBuffers(vkDevice, vkPhysicalDevice);
+				window->InitDescriptorPool(vkDevice, vkPhysicalDevice);
+				window->InitDescriptorSets(vkDevice, vkPhysicalDevice);
 				frameData.InitCommandBuffers(vkDevice);
 				frameData.InitSyncObjects(vkDevice);
 			}

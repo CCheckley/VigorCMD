@@ -7,6 +7,7 @@
 #include <SDL.h>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -18,7 +19,7 @@ namespace Vigor
 {
 	constexpr uint8_t MAX_FRAMES_IN_FLIGHT = 3;
 
-	struct ModelViewProjectionBuffer
+	struct alignas(16) ModelViewProjectionBuffer
 	{
 		glm::mat4x4 Model;
 		glm::mat4x4 View;
@@ -162,6 +163,12 @@ namespace Vigor
 			, renderPass()
 			, graphicsPipeline()
 			, frameData()
+			, descriptorPool()
+			, descriptorSetLayout()
+			, vkIndexBuffer()
+			, vkVertexBuffer()
+			, vkIndexBufferMemory()
+			, vkVertexBufferMemory()
 		{
 			window = SDL_CreateWindow("VigorCMD", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_SHOWN | SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 			if (window == nullptr)
@@ -486,11 +493,11 @@ namespace Vigor
 		void InitGraphicsPipelineAndLayoutAndShaderModules(VkDevice vkDevice) // TODO[CC] - split this up
 		{
 			// Shader Module Setup
-			auto VertexShaderCode = Filesystem::Read("./shaders/TriVS.spv");
-			auto PixelShaderCode = Filesystem::Read("./shaders/TriPS.spv");
+			auto VertexShaderCode = Filesystem::Read("./shaders/glsl/vert.spv");
+			auto FragmentShaderCode = Filesystem::Read("./shaders/glsl/frag.spv");
 
 			VkShaderModule vertexShaderModule = Shaders::CreateShaderModule(VertexShaderCode, vkDevice);
-			VkShaderModule pixelShaderModule = Shaders::CreateShaderModule(PixelShaderCode, vkDevice);
+			VkShaderModule fragmentShaderModule = Shaders::CreateShaderModule(FragmentShaderCode, vkDevice);
 
 			VkPipelineShaderStageCreateInfo createInfoVertexShaderStage{};
 			createInfoVertexShaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -498,13 +505,13 @@ namespace Vigor
 			createInfoVertexShaderStage.module = vertexShaderModule;
 			createInfoVertexShaderStage.pName = "main";
 
-			VkPipelineShaderStageCreateInfo createInfoPixelShaderStage{};
-			createInfoPixelShaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-			createInfoPixelShaderStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-			createInfoPixelShaderStage.module = pixelShaderModule;
-			createInfoPixelShaderStage.pName = "main";
+			VkPipelineShaderStageCreateInfo createInfoFragmentShaderStage{};
+			createInfoFragmentShaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+			createInfoFragmentShaderStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+			createInfoFragmentShaderStage.module = fragmentShaderModule;
+			createInfoFragmentShaderStage.pName = "main";
 
-			VkPipelineShaderStageCreateInfo shaderStages[] = { createInfoVertexShaderStage, createInfoPixelShaderStage };
+			VkPipelineShaderStageCreateInfo shaderStages[] = { createInfoVertexShaderStage, createInfoFragmentShaderStage };
 
 			// Dynamic State Setup
 			VkPipelineDynamicStateCreateInfo createInfoDynamicState{};
@@ -586,7 +593,7 @@ namespace Vigor
 			createInfoRasterizerState.polygonMode = VK_POLYGON_MODE_FILL; // Using any mode other than fill requires enabling a GPU feature.
 			createInfoRasterizerState.lineWidth = 1.0f; // describes the thickness of lines in number of fragments. The maximum line width depends on the hardware, any line thicker than 1.0f requires the "wideLines" GPU feature.
 			createInfoRasterizerState.cullMode = VK_CULL_MODE_BACK_BIT;
-			createInfoRasterizerState.frontFace = VK_FRONT_FACE_CLOCKWISE;
+			createInfoRasterizerState.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 			/*
 			* The rasterizer can alter the depth values by adding a constant value or biasing them based on a fragment's slope.
 			* This is sometimes used for shadow mapping, but we won't be using it so depthBiasEnable is set to VK_FALSE
@@ -697,7 +704,7 @@ namespace Vigor
 
 			// Shader Module Cleanup
 			vkDestroyShaderModule(vkDevice, vertexShaderModule, nullptr);
-			vkDestroyShaderModule(vkDevice, pixelShaderModule, nullptr);
+			vkDestroyShaderModule(vkDevice, fragmentShaderModule, nullptr);
 		}
 
 		/*
@@ -888,15 +895,15 @@ namespace Vigor
 		}
 
 		/*
-		* Initialize Constant Buffers
+		* Initialize Uniform Buffers
 		*/
-		void InitConstantBuffers(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		void InitUniformBuffers(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
 		{
 			VkDeviceSize bufferSize = sizeof(ModelViewProjectionBuffer);
 
-			constantBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-			constantBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
-			constantBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+			uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+			uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+			uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
 
 			for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 			{
@@ -907,10 +914,72 @@ namespace Vigor
 					bufferSize,
 					VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-					constantBuffers[i],
-					constantBuffersMemory[i]
+					uniformBuffers[i],
+					uniformBuffersMemory[i]
 				);
-				vkMapMemory(vkDevice, constantBuffersMemory[i], 0, bufferSize, 0, &constantBuffersMapped[i]);
+				vkMapMemory(vkDevice, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+			}
+		}
+
+		/*
+		* Initialize Descriptor Pool
+		*/
+		void InitDescriptorPool(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		{
+			VkDescriptorPoolSize poolSize{};
+			poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			poolSize.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+			VkDescriptorPoolCreateInfo createInfoDescriptorPool{};
+			createInfoDescriptorPool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+			createInfoDescriptorPool.poolSizeCount = 1;
+			createInfoDescriptorPool.pPoolSizes = &poolSize;
+			createInfoDescriptorPool.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+			if (vkCreateDescriptorPool(vkDevice, &createInfoDescriptorPool, nullptr, &descriptorPool) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to create descriptor pool!");
+			}
+		}
+
+		/*
+		* Initialize Descriptor Sets
+		*/
+		void InitDescriptorSets(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		{
+			std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
+
+			VkDescriptorSetAllocateInfo allocInfoDescriptorSet{};
+			allocInfoDescriptorSet.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+			allocInfoDescriptorSet.descriptorPool = descriptorPool;
+			allocInfoDescriptorSet.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			allocInfoDescriptorSet.pSetLayouts = layouts.data();
+
+			descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+			if (vkAllocateDescriptorSets(vkDevice, &allocInfoDescriptorSet, descriptorSets.data()) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to allocate descriptor sets!");
+			}
+
+			for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+			{
+				VkDescriptorBufferInfo bufferInfo{};
+				bufferInfo.buffer = uniformBuffers[i];
+				bufferInfo.offset = 0;
+				bufferInfo.range = sizeof(ModelViewProjectionBuffer);
+
+				VkWriteDescriptorSet writeDescriptorSet{};
+				writeDescriptorSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				writeDescriptorSet.dstSet = descriptorSets[i];
+				writeDescriptorSet.dstBinding = 0;
+				writeDescriptorSet.dstArrayElement = 0;
+				writeDescriptorSet.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+				writeDescriptorSet.descriptorCount = 1;
+				writeDescriptorSet.pBufferInfo = &bufferInfo;
+				writeDescriptorSet.pImageInfo = nullptr;
+				writeDescriptorSet.pTexelBufferView = nullptr;
+
+				vkUpdateDescriptorSets(vkDevice, 1, &writeDescriptorSet, 0, nullptr);
 			}
 		}
 
@@ -932,6 +1001,8 @@ namespace Vigor
 			{
 				throw std::runtime_error("Failed to acquire swap chain image!");
 			}
+
+			UpdateConstantBuffer(currentFrame);
 
 			vkResetFences(vkDevice, 1, &frameData.inFlightFences[currentFrame]);
 
@@ -965,42 +1036,54 @@ namespace Vigor
 				beginInfoRenderPass.pClearValues = &clearColor;
 
 				vkCmdBeginRenderPass(commandBuffer, &beginInfoRenderPass, VK_SUBPASS_CONTENTS_INLINE);
+				{
+					vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 
-				vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+					// Setup viewport dynamic
+					VkViewport viewport{};
+					viewport.x = 0.0f;
+					viewport.y = 0.0f;
+					viewport.width = (float)(swapChainExtent.width);
+					viewport.height = (float)(swapChainExtent.height);
+					viewport.minDepth = 0.0f;
+					viewport.maxDepth = 1.0f;
+					vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 
-				// Bind Vertex Buffers
-				VkBuffer vertexBuffers[] = { vkVertexBuffer };
-				VkDeviceSize offsets[] = { 0 };
+					// Setup scissor dynamic
+					VkRect2D scissor{};
+					scissor.offset = { 0, 0 };
+					scissor.extent = swapChainExtent;
+					vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-				vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-				vkCmdBindIndexBuffer(commandBuffer, vkIndexBuffer, 0, VK_INDEX_TYPE_UINT16);
+					// Bind Vertex Buffers
+					VkBuffer vertexBuffers[] = { vkVertexBuffer };
+					VkDeviceSize offsets[] = { 0 };
 
-				// Setup viewport dynamic
-				VkViewport viewport{};
-				viewport.x = 0.0f;
-				viewport.y = 0.0f;
-				viewport.width = (float)(swapChainExtent.width);
-				viewport.height = (float)(swapChainExtent.height);
-				viewport.minDepth = 0.0f;
-				viewport.maxDepth = 1.0f;
-				vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+					vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+					vkCmdBindIndexBuffer(commandBuffer, vkIndexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
-				// Setup scissor dynamic
-				VkRect2D scissor{};
-				scissor.offset = { 0, 0 };
-				scissor.extent = swapChainExtent;
-				vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+					vkCmdBindDescriptorSets
+					(
+						commandBuffer,
+						VK_PIPELINE_BIND_POINT_GRAPHICS,
+						pipelineLayout,
+						0,
+						1,
+						&descriptorSets[currentFrame],
+						0,
+						nullptr
+					);
 
-				vkCmdDrawIndexed
-				(
-					commandBuffer,
-					static_cast<uint32_t>(indices.size()), // idx count
-					1, // instance count
-					0, // first idx
-					0, // vert offset
-					0 // first instance
-				);
-
+					vkCmdDrawIndexed
+					(
+						commandBuffer,
+						static_cast<uint32_t>(indices.size()), // idx count
+						1, // instance count
+						0, // first idx
+						0, // vert offset
+						0 // first instance
+					);
+				}
 				vkCmdEndRenderPass(commandBuffer);
 
 				VkResult endCommandBufferRes = vkEndCommandBuffer(commandBuffer);
@@ -1010,8 +1093,6 @@ namespace Vigor
 					throw std::runtime_error(errorMsg);
 				}
 			}
-
-			UpdateConstantBuffer(currentFrame);
 
 			VkSubmitInfo submitInfo{};
 			submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1114,15 +1195,16 @@ namespace Vigor
 
 			ModelViewProjectionBuffer mvpBuffer{};
 			mvpBuffer.Model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-
 			mvpBuffer.View = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-
 			mvpBuffer.Projection = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 10.0f);
 
-			// adjust clip co-ordinates
-			mvpBuffer.Projection[1][1] *= -1;
+			//mvpBuffer.Model = glm::identity<glm::mat4x4>();
+			//mvpBuffer.View = glm::identity<glm::mat4x4>();
+			//mvpBuffer.Projection = glm::identity<glm::mat4x4>();
 
-			memcpy(constantBuffersMapped[currentFrame], &mvpBuffer, sizeof(mvpBuffer));
+			mvpBuffer.Projection[1][1] *= -1; // adjust clip co-ordinates
+
+			memcpy(uniformBuffersMapped[currentFrame], &mvpBuffer, sizeof(mvpBuffer));
 		}
 
 		// Shutdown
@@ -1132,10 +1214,11 @@ namespace Vigor
 
 			for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 			{
-				vkDestroyBuffer(vkDevice, constantBuffers[i], nullptr);
-				vkFreeMemory(vkDevice, constantBuffersMemory[i], nullptr);
+				vkDestroyBuffer(vkDevice, uniformBuffers[i], nullptr);
+				vkFreeMemory(vkDevice, uniformBuffersMemory[i], nullptr);
 			}
 
+			vkDestroyDescriptorPool(vkDevice, descriptorPool, nullptr);
 			vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout, nullptr);
 
 			vkDestroyBuffer(vkDevice, vkIndexBuffer, nullptr);
@@ -1229,8 +1312,6 @@ namespace Vigor
 		VkPipeline graphicsPipeline;
 		VkPipelineLayout pipelineLayout;
 
-		VkDescriptorSetLayout descriptorSetLayout;
-
 		// Frame Data - TODO[CC] Enable multiple
 		FrameData frameData;
 		uint32_t currentFrame = 0;
@@ -1269,8 +1350,13 @@ namespace Vigor
 		*	vertex buffer.
 		*/
 
-		std::vector<VkBuffer> constantBuffers;
-		std::vector<VkDeviceMemory> constantBuffersMemory;
-		std::vector<void*> constantBuffersMapped;
+		std::vector<VkBuffer> uniformBuffers;
+		std::vector<VkDeviceMemory> uniformBuffersMemory;
+		std::vector<void*> uniformBuffersMapped;
+
+		// Descriptor data
+		VkDescriptorPool descriptorPool;
+		std::vector<VkDescriptorSet> descriptorSets;
+		VkDescriptorSetLayout descriptorSetLayout;
 	};
 }
