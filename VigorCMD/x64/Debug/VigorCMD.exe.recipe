@@ -5,14 +5,7 @@
       <FullPath>E:\repos\VigorCMD\x64\Debug\VigorCMD.exe</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
-  <ContentFiles>
-    <ContentFile>
-      <FullPath>E:\repos\VigorCMD\x64\Debug\TriPS.cso</FullPath>
-    </ContentFile>
-    <ContentFile>
-      <FullPath>E:\repos\VigorCMD\x64\Debug\TriVS.cso</FullPath>
-    </ContentFile>
-  </ContentFiles>
+  <ContentFiles />
   <SatelliteDlls />
   <NonRecipeFileRefs />
 </Project>

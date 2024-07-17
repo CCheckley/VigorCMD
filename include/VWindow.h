@@ -11,6 +11,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 #include "VShaders.h"
 #include "VFilesystem.h"
 #include "VEngineTypes.h"
@@ -223,6 +226,255 @@ namespace Vigor
 		FrameData& GetFrameData()
 		{
 			return frameData;
+		}
+
+		// Utils
+		static uint32_t FindMemoryType(VkPhysicalDevice vkPhysicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags memoryPropertyFlags)
+		{
+			/*
+			* The VkPhysicalDeviceMemoryProperties structure has two arrays memoryTypes and memoryHeaps.
+			* Memory heaps are distinct memory resources like dedicated VRAM and swap space in RAM for when
+			*		VRAM runs out
+			*/
+			VkPhysicalDeviceMemoryProperties physicalDeviceMemoryProperties;
+			vkGetPhysicalDeviceMemoryProperties(vkPhysicalDevice, &physicalDeviceMemoryProperties);
+
+			for (uint32_t i = 0; i < physicalDeviceMemoryProperties.memoryTypeCount; i++)
+			{
+				if (
+					(typeFilter & (1 << i)) && // check available memory type idx against filter
+					(physicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & memoryPropertyFlags))
+				{
+					return i;
+				}
+			}
+
+			throw std::runtime_error("Failed to find suitable memory type!");
+		}
+
+		static void CreateBuffer(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryPropertyFlags, VkBuffer& buffer, VkDeviceMemory& bufferMemory)
+		{
+			VkBufferCreateInfo createInfoBuffer{};
+			createInfoBuffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+			createInfoBuffer.size = size;
+			createInfoBuffer.usage = usage;
+			createInfoBuffer.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+			if (vkCreateBuffer(vkDevice, &createInfoBuffer, nullptr, &buffer) != VK_SUCCESS)
+			{
+				throw std::runtime_error("Failed to create vertex buffer!");
+			}
+
+			VkMemoryRequirements memoryRequirements;
+			vkGetBufferMemoryRequirements(vkDevice, buffer, &memoryRequirements);
+
+			VkMemoryAllocateInfo memoryAllocateInfo{};
+			memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+			memoryAllocateInfo.allocationSize = memoryRequirements.size;
+			memoryAllocateInfo.memoryTypeIndex = FindMemoryType
+			(
+				vkPhysicalDevice,
+				memoryRequirements.memoryTypeBits,
+				memoryPropertyFlags
+			);
+
+			if (vkAllocateMemory(vkDevice, &memoryAllocateInfo, nullptr, &bufferMemory) != VK_SUCCESS)
+			{
+				throw std::runtime_error("Failed to allocate vertex buffer memory!");
+			}
+
+			vkBindBufferMemory(vkDevice, buffer, bufferMemory, 0); // bind allocated memory
+		}
+
+		static void CreateImage
+		(
+			VkDevice vkDevice,
+			VkPhysicalDevice vkPhysicalDevice,
+			int texWidth,
+			int texHeight,
+			VkFormat format,
+			VkImageTiling tiling,
+			VkImageUsageFlags usage,
+			VkMemoryPropertyFlags properties,
+			VkImage& image,
+			VkDeviceMemory& imageMemory
+		)
+		{
+			VkImageCreateInfo createInfoImage{};
+			createInfoImage.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+			createInfoImage.imageType = VK_IMAGE_TYPE_2D;
+			createInfoImage.extent.width = static_cast<uint32_t>(texWidth);
+			createInfoImage.extent.height = static_cast<uint32_t>(texHeight);
+			createInfoImage.extent.depth = 1;
+			createInfoImage.mipLevels = 1;
+			createInfoImage.arrayLayers = 1;
+			createInfoImage.format = format;
+			createInfoImage.tiling = tiling;
+			createInfoImage.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			createInfoImage.usage = usage;
+			createInfoImage.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+			createInfoImage.samples = VK_SAMPLE_COUNT_1_BIT;
+			createInfoImage.flags = 0; // Optional
+
+			if (vkCreateImage(vkDevice, &createInfoImage, nullptr, &image) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to create image!");
+			}
+
+			VkMemoryRequirements memoryRequirements;
+			vkGetImageMemoryRequirements(vkDevice, image, &memoryRequirements);
+
+			VkMemoryAllocateInfo allocInfoMemory{};
+			allocInfoMemory.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+			allocInfoMemory.allocationSize = memoryRequirements.size;
+			allocInfoMemory.memoryTypeIndex = FindMemoryType
+			(
+				vkPhysicalDevice,
+				memoryRequirements.memoryTypeBits,
+				properties
+			);
+
+			if (vkAllocateMemory(vkDevice, &allocInfoMemory, nullptr, &imageMemory))
+			{
+				throw std::runtime_error("Failed to alloc image memory!");
+			}
+
+			vkBindImageMemory(vkDevice, image, imageMemory, 0);
+		}
+
+		static VkCommandBuffer BeginOneTimeCommands(VkDevice vkDevice, FrameData& frameData)
+		{
+			VkCommandBufferAllocateInfo allocInfoCommandBuffer{};
+			allocInfoCommandBuffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+			allocInfoCommandBuffer.commandPool = frameData.commandPoolTransient;
+			allocInfoCommandBuffer.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // primary can be submitted but not called from other buffers, secondary cannot be submitted but can be called from others
+			allocInfoCommandBuffer.commandBufferCount = 1;
+
+			VkCommandBuffer commandBuffer;
+			if (vkAllocateCommandBuffers(vkDevice, &allocInfoCommandBuffer, &commandBuffer) != VK_SUCCESS)
+			{
+				throw std::runtime_error("Failed to allocate command buffers transient!");
+			}
+
+			VkCommandBufferBeginInfo beginInfoCommandBuffer{};
+			beginInfoCommandBuffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+			beginInfoCommandBuffer.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+			vkBeginCommandBuffer(commandBuffer, &beginInfoCommandBuffer);
+
+			return commandBuffer;
+		}
+
+		static void EndOneTimeCommands(VkDevice vkDevice, VkQueue graphicsQueue, FrameData& frameData, VkCommandBuffer commandBuffer)
+		{
+			vkEndCommandBuffer(commandBuffer);
+
+			VkSubmitInfo submitInfo{};
+			submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+			submitInfo.commandBufferCount = 1;
+			submitInfo.pCommandBuffers = &commandBuffer;
+
+			vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+			/*
+			* two possible ways to wait on this transfer to complete. We could use a fence and wait with vkWaitForFences,
+			*	or simply wait for the transfer queue to become idle with vkQueueWaitIdle. A fence would allow you to schedule
+			*	multiple transfers simultaneously and wait for all of them complete, instead of executing one at a time.
+			*	That may give the driver more opportunities to optimize.
+			*/
+			vkQueueWaitIdle(graphicsQueue);
+			vkFreeCommandBuffers(vkDevice, frameData.commandPoolTransient, 1, &commandBuffer);
+		}
+
+		static void TransitionImageLayout(VkDevice vkDevice, VkQueue graphicsQueue, FrameData& frameData, VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout)
+		{
+			VkCommandBuffer commandBuffer = BeginOneTimeCommands(vkDevice, frameData);
+
+			VkImageMemoryBarrier imageMemoryBarrier{};
+			imageMemoryBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+			imageMemoryBarrier.oldLayout = oldLayout;
+			imageMemoryBarrier.newLayout = newLayout;
+			imageMemoryBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			imageMemoryBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			imageMemoryBarrier.image = image;
+
+			imageMemoryBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			imageMemoryBarrier.subresourceRange.baseMipLevel = 0;
+			imageMemoryBarrier.subresourceRange.levelCount = 1;
+			imageMemoryBarrier.subresourceRange.baseArrayLayer = 0;
+			imageMemoryBarrier.subresourceRange.layerCount = 1;
+
+			imageMemoryBarrier.srcAccessMask = 0; // TODO
+			imageMemoryBarrier.dstAccessMask = 0; // TODO
+
+			VkPipelineStageFlags srcStage;
+			VkPipelineStageFlags dstStage;
+
+			if(oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+			{
+				imageMemoryBarrier.srcAccessMask = 0;
+				imageMemoryBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+				srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+				dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+			}
+			else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+			{
+				imageMemoryBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+				imageMemoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+				srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+				dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			}
+			else
+			{
+				throw std::invalid_argument("Unsupported layout transition!");
+			}
+
+			vkCmdPipelineBarrier
+			(
+				commandBuffer,
+				srcStage, dstStage,
+				0,
+				0, nullptr,
+				0, nullptr,
+				1, &imageMemoryBarrier
+			);
+
+			EndOneTimeCommands(vkDevice, graphicsQueue, frameData, commandBuffer);
+		}
+
+		static void CopyBufferToImage(VkDevice vkDevice, VkQueue graphicsQueue, FrameData& frameData, VkBuffer buffer, VkImage image, uint32_t width, uint32_t height)
+		{
+			VkCommandBuffer commandBuffer = BeginOneTimeCommands(vkDevice, frameData);
+
+			VkBufferImageCopy bufferImageCopyRegion{};
+			bufferImageCopyRegion.bufferOffset = 0;
+			bufferImageCopyRegion.bufferRowLength = 0;
+			bufferImageCopyRegion.bufferImageHeight = 0;
+
+			bufferImageCopyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			bufferImageCopyRegion.imageSubresource.mipLevel = 0;
+			bufferImageCopyRegion.imageSubresource.baseArrayLayer = 0;
+			bufferImageCopyRegion.imageSubresource.layerCount = 1;
+
+			bufferImageCopyRegion.imageOffset = {0, 0, 0};
+			bufferImageCopyRegion.imageExtent = 
+			{
+				width,
+				height,
+				1
+			};
+
+			vkCmdCopyBufferToImage(
+				commandBuffer,
+				buffer,
+				image,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				1,
+				&bufferImageCopyRegion
+			);
+
+			EndOneTimeCommands(vkDevice, graphicsQueue, frameData, commandBuffer);
 		}
 
 		// Initializers
@@ -737,62 +989,78 @@ namespace Vigor
 		}
 
 		/*
-		* Generic buffer initialization
+		* Initialize Texture Image
 		*/
-		static void InitBuffer(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memoryPropertyFlags, VkBuffer& buffer, VkDeviceMemory& bufferMemory)
+		void InitTextureImage(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
 		{
-			VkBufferCreateInfo createInfoBuffer{};
-			createInfoBuffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-			createInfoBuffer.size = size;
-			createInfoBuffer.usage = usage;
-			createInfoBuffer.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+			int texWidth, texHeight, texChannels;
+			stbi_uc* pixels = stbi_load("assets/textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+			VkDeviceSize imageSize = texWidth * texHeight * 4;
 
-			if (vkCreateBuffer(vkDevice, &createInfoBuffer, nullptr, &buffer) != VK_SUCCESS)
+			if (!pixels)
 			{
-				throw std::runtime_error("Failed to create vertex buffer!");
+				throw std::runtime_error("failed to load texture image!");
 			}
 
-			VkMemoryRequirements memoryRequirements;
-			vkGetBufferMemoryRequirements(vkDevice, buffer, &memoryRequirements);
-
-			auto findMemoryType = [vkPhysicalDevice, &buffer = buffer](uint32_t typeFilter, VkMemoryPropertyFlags memoryPropertyFlags)
-				{
-					/*
-					* The VkPhysicalDeviceMemoryProperties structure has two arrays memoryTypes and memoryHeaps.
-					* Memory heaps are distinct memory resources like dedicated VRAM and swap space in RAM for when
-					*		VRAM runs out
-					*/
-					VkPhysicalDeviceMemoryProperties physicalDeviceMemoryProperties;
-					vkGetPhysicalDeviceMemoryProperties(vkPhysicalDevice, &physicalDeviceMemoryProperties);
-
-					for (uint32_t i = 0; i < physicalDeviceMemoryProperties.memoryTypeCount; i++)
-					{
-						if (
-							(typeFilter & (1 << i)) && // check available memory type idx against filter
-							(physicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & memoryPropertyFlags))
-						{
-							return i;
-						}
-					}
-
-					throw std::runtime_error("Failed to find suitable memory type!");
-				};
-
-			VkMemoryAllocateInfo memoryAllocateInfo{};
-			memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-			memoryAllocateInfo.allocationSize = memoryRequirements.size;
-			memoryAllocateInfo.memoryTypeIndex = findMemoryType
+			VkBuffer stagingBuffer;
+			VkDeviceMemory stagingBufferMemory;
+			CreateBuffer
 			(
-				memoryRequirements.memoryTypeBits,
-				memoryPropertyFlags
+				vkDevice,
+				vkPhysicalDevice,
+				imageSize,
+				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				stagingBuffer,
+				stagingBufferMemory
 			);
 
-			if (vkAllocateMemory(vkDevice, &memoryAllocateInfo, nullptr, &bufferMemory) != VK_SUCCESS)
-			{
-				throw std::runtime_error("Failed to allocate vertex buffer memory!");
-			}
+			void* data;
+			vkMapMemory(vkDevice, stagingBufferMemory, 0, imageSize, 0, &data);
+			memcpy(data, pixels, static_cast<size_t>(imageSize));
+			vkUnmapMemory(vkDevice, stagingBufferMemory);
 
-			vkBindBufferMemory(vkDevice, buffer, bufferMemory, 0); // bind allocated memory
+			stbi_image_free(pixels);
+
+			CreateImage
+			(
+				vkDevice,
+				vkPhysicalDevice,
+				texWidth,
+				texHeight,
+				VK_FORMAT_R8G8B8A8_SRGB,
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				textureImage,
+				textureImageMemory
+			);
+
+			TransitionImageLayout
+			(
+				vkDevice,
+				graphicsQueue,
+				frameData,
+				textureImage,
+				VK_FORMAT_R8G8B8A8_SRGB,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+			);
+
+			TransitionImageLayout
+			(
+				vkDevice,
+				graphicsQueue,
+				frameData,
+				textureImage,
+				VK_FORMAT_R8G8B8A8_SRGB,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+			);
+
+			// Cleanup
+			vkDestroyBuffer(vkDevice, stagingBuffer, nullptr);
+			vkFreeMemory(vkDevice, stagingBufferMemory, nullptr);
 		}
 
 		/*
@@ -805,7 +1073,7 @@ namespace Vigor
 			// Staging buffer which can have data accessable via CPU
 			VkBuffer stagingBuffer;
 			VkDeviceMemory stagingBufferMemory;
-			InitBuffer(
+			CreateBuffer(
 				vkDevice,
 				vkPhysicalDevice,
 				bufferSize,
@@ -834,7 +1102,7 @@ namespace Vigor
 			vkUnmapMemory(vkDevice, stagingBufferMemory);
 
 			// Vertex buffer where its memory is GPU only and updated via the staging buffer
-			InitBuffer(
+			CreateBuffer(
 				vkDevice,
 				vkPhysicalDevice,
 				bufferSize,
@@ -861,7 +1129,7 @@ namespace Vigor
 
 			VkBuffer stagingBuffer;
 			VkDeviceMemory stagingBufferMemory;
-			InitBuffer
+			CreateBuffer
 			(
 				vkDevice,
 				vkPhysicalDevice,
@@ -877,7 +1145,7 @@ namespace Vigor
 			memcpy(data, indices.data(), (size_t)bufferSize);
 			vkUnmapMemory(vkDevice, stagingBufferMemory);
 
-			InitBuffer
+			CreateBuffer
 			(
 				vkDevice,
 				vkPhysicalDevice,
@@ -907,7 +1175,7 @@ namespace Vigor
 
 			for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 			{
-				InitBuffer
+				CreateBuffer
 				(
 					vkDevice,
 					vkPhysicalDevice,
@@ -1143,47 +1411,16 @@ namespace Vigor
 
 		void CopyBufferData(VkDevice vkDevice, VkBuffer srcBuff, VkBuffer dstBuff, VkDeviceSize size)
 		{
-			VkCommandBufferAllocateInfo allocInfoCommandBuffer{};
-			allocInfoCommandBuffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-			allocInfoCommandBuffer.commandPool = frameData.commandPoolTransient;
-			allocInfoCommandBuffer.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // primary can be submitted but not called from other buffers, secondary cannot be submitted but can be called from others
-			allocInfoCommandBuffer.commandBufferCount = 1;
-
-			VkCommandBuffer copyCommandBuffer;
-			if (vkAllocateCommandBuffers(vkDevice, &allocInfoCommandBuffer, &copyCommandBuffer) != VK_SUCCESS)
-			{
-				throw std::runtime_error("Failed to allocate command buffers transient!");
-			}
-
-			VkCommandBufferBeginInfo beginInfoCommandBuffer{};
-			beginInfoCommandBuffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-			beginInfoCommandBuffer.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-			vkBeginCommandBuffer(copyCommandBuffer, &beginInfoCommandBuffer);
+			VkCommandBuffer commandBuffer = BeginOneTimeCommands(vkDevice, frameData);
 
 			// Do the copy
 			VkBufferCopy copyBufferRegion{};
 			copyBufferRegion.srcOffset = 0; // Optional
 			copyBufferRegion.dstOffset = 0; // Optional
 			copyBufferRegion.size = size;
-			vkCmdCopyBuffer(copyCommandBuffer, srcBuff, dstBuff, 1, &copyBufferRegion);
+			vkCmdCopyBuffer(commandBuffer, srcBuff, dstBuff, 1, &copyBufferRegion);
 
-			vkEndCommandBuffer(copyCommandBuffer);
-
-			VkSubmitInfo submitInfo{};
-			submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-			submitInfo.commandBufferCount = 1;
-			submitInfo.pCommandBuffers = &copyCommandBuffer;
-
-			vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-			/*
-			* two possible ways to wait on this transfer to complete. We could use a fence and wait with vkWaitForFences,
-			*	or simply wait for the transfer queue to become idle with vkQueueWaitIdle. A fence would allow you to schedule
-			*	multiple transfers simultaneously and wait for all of them complete, instead of executing one at a time.
-			*	That may give the driver more opportunities to optimize.
-			*/
-			vkQueueWaitIdle(graphicsQueue);
-			vkFreeCommandBuffers(vkDevice, frameData.commandPoolTransient, 1, &copyCommandBuffer);
+			EndOneTimeCommands(vkDevice, graphicsQueue, frameData, commandBuffer);
 		}
 
 		void UpdateConstantBuffer(uint32_t currentFrame)
@@ -1211,6 +1448,9 @@ namespace Vigor
 		void Shutdown(VkInstance vkInstance, VkDevice vkDevice)
 		{
 			ShutdownSwapChain(vkDevice);
+
+			vkDestroyImage(vkDevice, textureImage, nullptr);
+			vkFreeMemory(vkDevice, textureImageMemory, nullptr);
 
 			for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 			{
@@ -1341,6 +1581,10 @@ namespace Vigor
 
 		VkBuffer vkIndexBuffer;
 		VkDeviceMemory vkIndexBufferMemory;
+
+		VkImage textureImage;
+		VkDeviceMemory textureImageMemory;
+
 		/* !! NOTE !!
 		* the memory type that allows us to access it from the CPU may not be the most optimal memory type for the graphics card
 		*	to read from. The most optimal memory has the VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT flag and is usually not accessible

@@ -66,6 +66,7 @@ namespace Vigor
 				FrameData& frameData = window->GetFrameData();
 				frameData.InitCommandPool(vkDevice, queueFamilyIndicies);
 				frameData.InitCommandPoolTransient(vkDevice, queueFamilyIndicies);
+				window->InitTextureImage(vkDevice, vkPhysicalDevice);
 				window->InitVertexBuffer(vkDevice, vkPhysicalDevice); // HANDLE VERTEX BUFFER INIT
 				window->InitIndexBuffer(vkDevice, vkPhysicalDevice); // HANDLE INDEX BUFFER INIT
 				window->InitUniformBuffers(vkDevice, vkPhysicalDevice);
