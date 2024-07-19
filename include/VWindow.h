@@ -477,6 +477,28 @@ namespace Vigor
 			EndOneTimeCommands(vkDevice, graphicsQueue, frameData, commandBuffer);
 		}
 
+		VkImageView CreateImageView(VkDevice vkDevice, VkImage image, VkFormat format)
+		{
+			VkImageViewCreateInfo imageViewCreateInfo{};
+			imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+			imageViewCreateInfo.image = image;
+			imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+			imageViewCreateInfo.format = format;
+			imageViewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
+			imageViewCreateInfo.subresourceRange.levelCount = 1;
+			imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
+			imageViewCreateInfo.subresourceRange.layerCount = 1;
+
+			VkImageView imageView;
+			if (vkCreateImageView(vkDevice, &imageViewCreateInfo, nullptr, &imageView) != VK_SUCCESS)
+			{
+				throw std::runtime_error("Failed to create texture image view!");
+			}
+
+			return imageView;
+		}
+
 		// Initializers
 		/*
 		* Init Window VK Surface
@@ -613,42 +635,7 @@ namespace Vigor
 
 			for (size_t i = 0; i < swapChainImages.size(); i++)
 			{
-				VkImageViewCreateInfo imageViewCreateInfo{};
-				imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-				imageViewCreateInfo.image = swapChainImages[i];
-				imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; // Can be 1d,2d,3d, arrays of the former, etc.
-				imageViewCreateInfo.format = swapChainSurfaceFormat.format;
-
-				/*
-				* The components field allows you to swizzle the color channels around.
-				* For example, you can map all of the channels to the red channel for a monochrome texture.
-				* You can also map constant values of 0 and 1 to a channel. In our case we'll stick to the default mapping.
-				*/
-				imageViewCreateInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-				imageViewCreateInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-				imageViewCreateInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-				imageViewCreateInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-
-				/*
-				* The subresourceRange field describes what the image's purpose is and which part of the image should be accessed.
-				* Our images will be used as color targets without any mipmapping levels or multiple layers.
-				*/
-				imageViewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-				imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
-				imageViewCreateInfo.subresourceRange.levelCount = 1;
-				imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
-				imageViewCreateInfo.subresourceRange.layerCount = 1;
-				/* - NOTE -
-				* If you were working on a stereographic 3D application, then you would create a swap chain with multiple layers.
-				* You could then create multiple image views for each image representing the views for the left and right eyes by accessing different layers.
-				*/
-
-				VkResult createImageViewRes = vkCreateImageView(vkDevice, &imageViewCreateInfo, nullptr, &swapChainImageViews[i]);
-				if (createImageViewRes != VK_SUCCESS)
-				{
-					std::string errorMsg = std::format("Failed to create image view Error: {}, Index: {}\n\n", (int)createImageViewRes, i);
-					throw std::runtime_error(errorMsg);
-				}
+				swapChainImageViews[i] = CreateImageView(vkDevice, swapChainImages[i], swapChainSurfaceFormat.format);
 			}
 		}
 
@@ -1064,6 +1051,58 @@ namespace Vigor
 		}
 
 		/*
+		* Initialize Texture Image View
+		*/
+		void InitTextureImageView(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		{
+			textureImageView = CreateImageView(vkDevice, textureImage, VK_FORMAT_R8G8B8A8_SRGB);
+		}
+
+		/*
+		* Initialize Texture Sampler
+		*/
+		void InitTextureSampler(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		{
+			VkSamplerCreateInfo createInfoSampler{};
+			createInfoSampler.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+			createInfoSampler.magFilter = VK_FILTER_LINEAR;
+			createInfoSampler.minFilter = VK_FILTER_LINEAR;
+			createInfoSampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+			createInfoSampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+			createInfoSampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+
+			// TODO[CC] - remove this and just collect during engine init and use dependancy injection to put query them here
+			VkPhysicalDeviceProperties physicalDeviceProperties{};
+			vkGetPhysicalDeviceProperties(vkPhysicalDevice, &physicalDeviceProperties);
+
+			createInfoSampler.anisotropyEnable = VK_TRUE;
+			createInfoSampler.maxAnisotropy = physicalDeviceProperties.limits.maxSamplerAnisotropy;
+
+			// Can choose to ignore filtering in the sampler
+			//createInfoSampler.anisotropyEnable = VK_FALSE;
+			//createInfoSampler.maxAnisotropy = 1.0f;
+
+			createInfoSampler.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+
+			// sample in the range of [0, 1)
+			createInfoSampler.unnormalizedCoordinates = VK_FALSE;
+
+			createInfoSampler.compareEnable = VK_FALSE; // mainly used for percentage-closer filtering on shadow maps
+			createInfoSampler.compareOp = VK_COMPARE_OP_ALWAYS;
+
+			createInfoSampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+			createInfoSampler.mipLodBias = 0.0f;
+			createInfoSampler.minLod = 0.0f;
+			createInfoSampler.maxLod = 0.0f;
+
+
+			if (vkCreateSampler(vkDevice, &createInfoSampler, nullptr, &textureSampler) != VK_SUCCESS)
+			{
+				throw std::runtime_error("Failed to create texture sampler!");
+			}
+		}
+
+		/*
 		* Initialize Vertex Buffer
 		*/
 		void InitVertexBuffer(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
@@ -1449,6 +1488,9 @@ namespace Vigor
 		{
 			ShutdownSwapChain(vkDevice);
 
+			vkDestroySampler(vkDevice, textureSampler, nullptr);
+			vkDestroyImageView(vkDevice, textureImageView, nullptr);
+
 			vkDestroyImage(vkDevice, textureImage, nullptr);
 			vkFreeMemory(vkDevice, textureImageMemory, nullptr);
 
@@ -1584,6 +1626,9 @@ namespace Vigor
 
 		VkImage textureImage;
 		VkDeviceMemory textureImageMemory;
+
+		VkImageView textureImageView;
+		VkSampler textureSampler;
 
 		/* !! NOTE !!
 		* the memory type that allows us to access it from the CPU may not be the most optimal memory type for the graphics card

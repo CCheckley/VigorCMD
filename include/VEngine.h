@@ -67,6 +67,8 @@ namespace Vigor
 				frameData.InitCommandPool(vkDevice, queueFamilyIndicies);
 				frameData.InitCommandPoolTransient(vkDevice, queueFamilyIndicies);
 				window->InitTextureImage(vkDevice, vkPhysicalDevice);
+				window->InitTextureImageView(vkDevice, vkPhysicalDevice);
+				window->InitTextureSampler(vkDevice, vkPhysicalDevice);
 				window->InitVertexBuffer(vkDevice, vkPhysicalDevice); // HANDLE VERTEX BUFFER INIT
 				window->InitIndexBuffer(vkDevice, vkPhysicalDevice); // HANDLE INDEX BUFFER INIT
 				window->InitUniformBuffers(vkDevice, vkPhysicalDevice);
@@ -283,8 +285,8 @@ namespace Vigor
 					// TODO[CC] Do this more elegantly
 					bool bResult = (physicalDeviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
 
-					// Force Geo-shader requirement
-					if (physicalDeviceFeatures.geometryShader != VK_TRUE) // TODO[CC] Do this more elegantly
+					// Force Geo-shader AND anisotropic filtering requirements
+					if (physicalDeviceFeatures.geometryShader != VK_TRUE || physicalDeviceFeatures.samplerAnisotropy != VK_TRUE) // TODO[CC] Do this more elegantly
 					{
 						return false;
 					}
@@ -413,6 +415,7 @@ namespace Vigor
 
 			// VK Device Setup
 			VkPhysicalDeviceFeatures deviceFeatures = {};
+			deviceFeatures.samplerAnisotropy = VK_TRUE; // enable anisotropic filtering support on samplers
 			VkDeviceCreateInfo deviceCreateInfo =
 			{
 				VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,           // sType

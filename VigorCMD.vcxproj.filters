@@ -25,6 +25,9 @@
     </None>
     <None Include="shaders\glsl\fragment\shader.frag" />
     <None Include="shaders\glsl\vertex\shader.vert" />
+    <None Include="README.md" />
+    <None Include=".gitignore" />
+    <None Include="LICENSE" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\VWindow.h">
