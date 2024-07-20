@@ -715,10 +715,18 @@ namespace Vigor
 			mvpBufferLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 			mvpBufferLayoutBinding.pImmutableSamplers = nullptr;
 
+			VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+			samplerLayoutBinding.binding = 1;
+			samplerLayoutBinding.descriptorCount = 1;
+			samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			samplerLayoutBinding.pImmutableSamplers = nullptr;
+			samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+			std::array<VkDescriptorSetLayoutBinding, 2> bindings = { mvpBufferLayoutBinding, samplerLayoutBinding };
 			VkDescriptorSetLayoutCreateInfo createInfoDescriptorSetLayout{};
 			createInfoDescriptorSetLayout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-			createInfoDescriptorSetLayout.bindingCount = 1;
-			createInfoDescriptorSetLayout.pBindings = &mvpBufferLayoutBinding;
+			createInfoDescriptorSetLayout.bindingCount = static_cast<uint32_t>(bindings.size());
+			createInfoDescriptorSetLayout.pBindings = bindings.data();
 
 			if (vkCreateDescriptorSetLayout(vkDevice, &createInfoDescriptorSetLayout, nullptr, &descriptorSetLayout) != VK_SUCCESS)
 			{
@@ -1034,6 +1042,17 @@ namespace Vigor
 				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
 			);
 
+			CopyBufferToImage
+			(
+				vkDevice,
+				graphicsQueue,
+				frameData,
+				stagingBuffer,
+				textureImage,
+				static_cast<uint32_t>(texWidth),
+				static_cast<uint32_t>(texHeight)
+			);
+
 			TransitionImageLayout
 			(
 				vkDevice,
@@ -1233,14 +1252,16 @@ namespace Vigor
 		*/
 		void InitDescriptorPool(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
 		{
-			VkDescriptorPoolSize poolSize{};
-			poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-			poolSize.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			std::array<VkDescriptorPoolSize, 2> poolSizes{};
+			poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+			poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
 			VkDescriptorPoolCreateInfo createInfoDescriptorPool{};
 			createInfoDescriptorPool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-			createInfoDescriptorPool.poolSizeCount = 1;
-			createInfoDescriptorPool.pPoolSizes = &poolSize;
+			createInfoDescriptorPool.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+			createInfoDescriptorPool.pPoolSizes = poolSizes.data();
 			createInfoDescriptorPool.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
 			if (vkCreateDescriptorPool(vkDevice, &createInfoDescriptorPool, nullptr, &descriptorPool) != VK_SUCCESS)
@@ -1275,18 +1296,29 @@ namespace Vigor
 				bufferInfo.offset = 0;
 				bufferInfo.range = sizeof(ModelViewProjectionBuffer);
 
-				VkWriteDescriptorSet writeDescriptorSet{};
-				writeDescriptorSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-				writeDescriptorSet.dstSet = descriptorSets[i];
-				writeDescriptorSet.dstBinding = 0;
-				writeDescriptorSet.dstArrayElement = 0;
-				writeDescriptorSet.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-				writeDescriptorSet.descriptorCount = 1;
-				writeDescriptorSet.pBufferInfo = &bufferInfo;
-				writeDescriptorSet.pImageInfo = nullptr;
-				writeDescriptorSet.pTexelBufferView = nullptr;
+				VkDescriptorImageInfo imageInfo{};
+				imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				imageInfo.imageView = textureImageView;
+				imageInfo.sampler = textureSampler;
 
-				vkUpdateDescriptorSets(vkDevice, 1, &writeDescriptorSet, 0, nullptr);
+				std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+				descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				descriptorWrites[0].dstSet = descriptorSets[i];
+				descriptorWrites[0].dstBinding = 0;
+				descriptorWrites[0].dstArrayElement = 0;
+				descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+				descriptorWrites[0].descriptorCount = 1;
+				descriptorWrites[0].pBufferInfo = &bufferInfo;
+
+				descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				descriptorWrites[1].dstSet = descriptorSets[i];
+				descriptorWrites[1].dstBinding = 1;
+				descriptorWrites[1].dstArrayElement = 0;
+				descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+				descriptorWrites[1].descriptorCount = 1;
+				descriptorWrites[1].pImageInfo = &imageInfo;
+
+				vkUpdateDescriptorSets(vkDevice, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 			}
 		}
 
@@ -1603,12 +1635,13 @@ namespace Vigor
 		std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
 
 		// TODO[CC] these are here for in-dev, create functionality to collect verts and attr's from "imported" meshes etc. for the scene to display
-		const std::vector<Vertex> vertices =
+		const std::vector<Vertex> vertices = 
 		{
-			{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-			{{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-			{{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-			{{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+			// pos			 // color			 // texCoord
+			{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+			{{0.5f, -0.5f},	 {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+			{{0.5f, 0.5f},	 {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+			{{-0.5f, 0.5f},	 {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
 		};
 
 		// contents of index buffer

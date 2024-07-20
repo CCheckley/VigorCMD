@@ -64,8 +64,10 @@ namespace Vigor
 			for (auto& window : windows)
 			{
 				FrameData& frameData = window->GetFrameData();
+
 				frameData.InitCommandPool(vkDevice, queueFamilyIndicies);
 				frameData.InitCommandPoolTransient(vkDevice, queueFamilyIndicies);
+
 				window->InitTextureImage(vkDevice, vkPhysicalDevice);
 				window->InitTextureImageView(vkDevice, vkPhysicalDevice);
 				window->InitTextureSampler(vkDevice, vkPhysicalDevice);
@@ -74,6 +76,7 @@ namespace Vigor
 				window->InitUniformBuffers(vkDevice, vkPhysicalDevice);
 				window->InitDescriptorPool(vkDevice, vkPhysicalDevice);
 				window->InitDescriptorSets(vkDevice, vkPhysicalDevice);
+
 				frameData.InitCommandBuffers(vkDevice);
 				frameData.InitSyncObjects(vkDevice);
 			}
