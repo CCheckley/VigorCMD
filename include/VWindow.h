@@ -8,6 +8,7 @@
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -409,6 +410,16 @@ namespace Vigor
 			VkPipelineStageFlags srcStage;
 			VkPipelineStageFlags dstStage;
 
+			if (newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+			{
+				imageMemoryBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+
+				if (FormatHasStencilComponent(format))
+				{
+					imageMemoryBarrier.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+				}
+			}
+
 			if(oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
 			{
 				imageMemoryBarrier.srcAccessMask = 0;
@@ -424,6 +435,14 @@ namespace Vigor
 
 				srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
 				dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			}
+			else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+			{
+				imageMemoryBarrier.srcAccessMask = 0;
+				imageMemoryBarrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+				srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+				dstStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
 			}
 			else
 			{
@@ -477,14 +496,14 @@ namespace Vigor
 			EndOneTimeCommands(vkDevice, graphicsQueue, frameData, commandBuffer);
 		}
 
-		VkImageView CreateImageView(VkDevice vkDevice, VkImage image, VkFormat format)
+		static VkImageView CreateImageView(VkDevice vkDevice, VkImage image, VkFormat format, VkImageAspectFlags aspectFlags)
 		{
 			VkImageViewCreateInfo imageViewCreateInfo{};
 			imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 			imageViewCreateInfo.image = image;
 			imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
 			imageViewCreateInfo.format = format;
-			imageViewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			imageViewCreateInfo.subresourceRange.aspectMask = aspectFlags;
 			imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
 			imageViewCreateInfo.subresourceRange.levelCount = 1;
 			imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
@@ -497,6 +516,46 @@ namespace Vigor
 			}
 
 			return imageView;
+		}
+
+		static VkFormat GetSupportedFormat(VkPhysicalDevice vkPhysicalDevice, const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features)
+		{
+			for(VkFormat format : candidates)
+			{
+				VkFormatProperties formatProperties;
+				vkGetPhysicalDeviceFormatProperties(vkPhysicalDevice, format, &formatProperties);
+
+				if (tiling == VK_IMAGE_TILING_LINEAR &&
+					(formatProperties.linearTilingFeatures & features) == features)
+				{
+					return format;
+				}
+
+				if (tiling == VK_IMAGE_TILING_OPTIMAL &&
+					(formatProperties.optimalTilingFeatures & features) == features)
+				{
+					return format;
+				}
+			}
+
+			throw std::runtime_error("Failed to find supported format!");
+		}
+
+		static VkFormat GetDepthFormat(VkPhysicalDevice vkPhysicalDevice)
+		{
+			return GetSupportedFormat
+			(
+				vkPhysicalDevice,
+				{VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT},
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+			);
+		}
+
+		static bool FormatHasStencilComponent(VkFormat format)
+		{
+			return format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+				format == VK_FORMAT_D24_UNORM_S8_UINT;
 		}
 
 		// Initializers
@@ -635,15 +694,16 @@ namespace Vigor
 
 			for (size_t i = 0; i < swapChainImages.size(); i++)
 			{
-				swapChainImageViews[i] = CreateImageView(vkDevice, swapChainImages[i], swapChainSurfaceFormat.format);
+				swapChainImageViews[i] = CreateImageView(vkDevice, swapChainImages[i], swapChainSurfaceFormat.format, VK_IMAGE_ASPECT_COLOR_BIT);
 			}
 		}
 
 		/*
 		* Initialize render pass // TODO[CC] Handle Multiple
 		*/
-		void InitRenderPass(VkDevice vkDevice)
+		void InitRenderPass(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
 		{
+			// COLOR
 			VkAttachmentDescription colorAttachment{};
 			colorAttachment.format = swapChainSurfaceFormat.format;
 			colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT; // no msaa yet so stick with 1
@@ -659,10 +719,26 @@ namespace Vigor
 			colorAttachmentRef.attachment = 0; // specifies which attachment to reference by its index
 			colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+			// DEPTH
+			VkAttachmentDescription depthAttachment{};
+			depthAttachment.format = GetDepthFormat(vkPhysicalDevice);
+			depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+			depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+			depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+			depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+			depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+			depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+			VkAttachmentReference depthAttachmentRef{};
+			depthAttachmentRef.attachment = 1;
+			depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
 			VkSubpassDescription subpass{};
 			subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS; // supports compute subpasses so need to be explicit
 			subpass.colorAttachmentCount = 1;
 			subpass.pColorAttachments = &colorAttachmentRef;
+			subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
 			/* -- NOTE --
 			* The index of the attachment in this array is directly referenced from the fragment shader with "layout(location = 0) out vec4 outColor" in OpenGL
@@ -679,16 +755,17 @@ namespace Vigor
 			subpassDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
 			subpassDependency.dstSubpass = 0;
 			// what do we wait on
-			subpassDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+			subpassDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
 			subpassDependency.srcAccessMask = 0;
 			// wait on color attachment stage and the writing of this, dont transition until allowed + necessary
-			subpassDependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-			subpassDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+			subpassDependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+			subpassDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
+			std::array<VkAttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
 			VkRenderPassCreateInfo createInfoRenderPass{};
 			createInfoRenderPass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-			createInfoRenderPass.attachmentCount = 1;
-			createInfoRenderPass.pAttachments = &colorAttachment;
+			createInfoRenderPass.attachmentCount = static_cast<uint32_t>(attachments.size());
+			createInfoRenderPass.pAttachments = attachments.data();
 			createInfoRenderPass.subpassCount = 1;
 			createInfoRenderPass.pSubpasses = &subpass;
 			// use subpass depenency
@@ -920,6 +997,18 @@ namespace Vigor
 				throw std::runtime_error("Failed to create pipeline layout!");
 			}
 
+			VkPipelineDepthStencilStateCreateInfo depthStencil{};
+			depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+			depthStencil.depthTestEnable = VK_TRUE;
+			depthStencil.depthWriteEnable = VK_TRUE;
+			depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+			depthStencil.depthBoundsTestEnable = VK_FALSE;
+			depthStencil.minDepthBounds = 0.0f; // Optional
+			depthStencil.maxDepthBounds = 1.0f; // Optional
+			depthStencil.stencilTestEnable = VK_FALSE;
+			depthStencil.front = {}; // Optional
+			depthStencil.back = {}; // Optional
+
 			// Create the pipeline
 			VkGraphicsPipelineCreateInfo createInfoGraphicsPipeline{};
 			createInfoGraphicsPipeline.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -943,6 +1032,9 @@ namespace Vigor
 			createInfoGraphicsPipeline.basePipelineHandle = VK_NULL_HANDLE;
 			createInfoGraphicsPipeline.basePipelineIndex = -1;
 
+			// use depth stencil state for depth testing of fragment shaders for discard
+			createInfoGraphicsPipeline.pDepthStencilState = &depthStencil;
+
 			// pipeline cache and batch pipeline creation can also be configured
 			if (vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, 1, &createInfoGraphicsPipeline, nullptr, &graphicsPipeline) != VK_SUCCESS)
 			{
@@ -963,13 +1055,12 @@ namespace Vigor
 
 			for (size_t i = 0; i < swapChainImageViews.size(); i++)
 			{
-				VkImageView attachments[] = { swapChainImageViews[i] };
-
+				std::array<VkImageView, 2> attachments = { swapChainImageViews[i], depthImageView };
 				VkFramebufferCreateInfo createInfoFrameBuffer{};
 				createInfoFrameBuffer.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 				createInfoFrameBuffer.renderPass = renderPass;
-				createInfoFrameBuffer.attachmentCount = 1;
-				createInfoFrameBuffer.pAttachments = attachments;
+				createInfoFrameBuffer.attachmentCount = static_cast<uint32_t>(attachments.size());
+				createInfoFrameBuffer.pAttachments = attachments.data();
 				createInfoFrameBuffer.width = swapChainExtent.width;
 				createInfoFrameBuffer.height = swapChainExtent.height;
 				createInfoFrameBuffer.layers = 1;
@@ -981,6 +1072,39 @@ namespace Vigor
 					throw std::runtime_error(errorMsg);
 				}
 			}
+		}
+
+		/*
+		* Initialize Depth Buffer Resources
+		*/
+		void InitDepthBufferResources(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		{
+			VkFormat depthFormat = GetDepthFormat(vkPhysicalDevice);
+			CreateImage
+			(
+				vkDevice,
+				vkPhysicalDevice,
+				swapChainExtent.width,
+				swapChainExtent.height,
+				depthFormat,
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				depthImage,
+				depthImageMemory
+			);
+			depthImageView = CreateImageView(vkDevice, depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+			TransitionImageLayout
+			(
+				vkDevice,
+				graphicsQueue,
+				frameData,
+				depthImage,
+				depthFormat,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+			);
 		}
 
 		/*
@@ -1074,7 +1198,7 @@ namespace Vigor
 		*/
 		void InitTextureImageView(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
 		{
-			textureImageView = CreateImageView(vkDevice, textureImage, VK_FORMAT_R8G8B8A8_SRGB);
+			textureImageView = CreateImageView(vkDevice, textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
 		}
 
 		/*
@@ -1370,9 +1494,13 @@ namespace Vigor
 				beginInfoRenderPass.renderArea.offset = { 0, 0 };
 				beginInfoRenderPass.renderArea.extent = swapChainExtent;
 
-				VkClearValue clearColor = { 0.0f, 0.0f, 0.0f, 1.0f };
-				beginInfoRenderPass.clearValueCount = 1;
-				beginInfoRenderPass.pClearValues = &clearColor;
+				// the order of clearValues should be identical to the order of the render pass VkAttachment's
+				std::array<VkClearValue, 2> clearValues{};
+				clearValues[0].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+				clearValues[1].depthStencil = { 1.0f, 0 };
+
+				beginInfoRenderPass.clearValueCount = static_cast<uint32_t>(clearValues.size());
+				beginInfoRenderPass.pClearValues = clearValues.data();
 
 				vkCmdBeginRenderPass(commandBuffer, &beginInfoRenderPass, VK_SUBPASS_CONTENTS_INLINE);
 				{
@@ -1552,6 +1680,11 @@ namespace Vigor
 
 		void ShutdownSwapChain(VkDevice vkDevice)
 		{
+			// depth buffer cleanup
+			vkDestroyImageView(vkDevice, depthImageView, nullptr);
+			vkDestroyImage(vkDevice, depthImage, nullptr);
+			vkFreeMemory(vkDevice, depthImageMemory, nullptr);
+
 			for (auto framebuffer : swapChainFramebuffers)
 			{
 				vkDestroyFramebuffer(vkDevice, framebuffer, nullptr);
@@ -1585,6 +1718,7 @@ namespace Vigor
 
 			InitSwapChain(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies);
 			InitImageViews(vkDevice);
+			InitDepthBufferResources(vkDevice, vkPhysicalDevice);
 			InitFrameBuffers(vkDevice);
 		}
 
@@ -1637,17 +1771,23 @@ namespace Vigor
 		// TODO[CC] these are here for in-dev, create functionality to collect verts and attr's from "imported" meshes etc. for the scene to display
 		const std::vector<Vertex> vertices = 
 		{
-			// pos			 // color			 // texCoord
-			{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-			{{0.5f, -0.5f},	 {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-			{{0.5f, 0.5f},	 {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-			{{-0.5f, 0.5f},	 {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
+			// pos					// color			// texCoord
+			{{-0.5f, -0.5f, 0.0f},  {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+			{{0.5f, -0.5f, 0.0f},	{0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+			{{0.5f, 0.5f, 0.0f},	{0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+			{{-0.5f, 0.5f, 0.0f},	{1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
+
+			{{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+			{{0.5f, -0.5f, -0.5f},	{0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+			{{0.5f, 0.5f, -0.5f},	{0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+			{{-0.5f, 0.5f, -0.5f},	{1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}
 		};
 
 		// contents of index buffer
 		const std::vector<uint16_t> indices =
 		{
-			0, 1, 2, 2, 3, 0
+			0, 1, 2, 2, 3, 0,
+			4, 5, 6, 6, 7, 4
 		};
 
 		// TODO[CC] support multiple
@@ -1656,12 +1796,6 @@ namespace Vigor
 
 		VkBuffer vkIndexBuffer;
 		VkDeviceMemory vkIndexBufferMemory;
-
-		VkImage textureImage;
-		VkDeviceMemory textureImageMemory;
-
-		VkImageView textureImageView;
-		VkSampler textureSampler;
 
 		/* !! NOTE !!
 		* the memory type that allows us to access it from the CPU may not be the most optimal memory type for the graphics card
@@ -1675,6 +1809,17 @@ namespace Vigor
 		std::vector<VkBuffer> uniformBuffers;
 		std::vector<VkDeviceMemory> uniformBuffersMemory;
 		std::vector<void*> uniformBuffersMapped;
+
+		// Texture sampling
+		VkImage textureImage;
+		VkDeviceMemory textureImageMemory;
+		VkImageView textureImageView;
+		VkSampler textureSampler;
+
+		// Depth Buffering
+		VkImage depthImage;
+		VkDeviceMemory depthImageMemory;
+		VkImageView depthImageView;
 
 		// Descriptor data
 		VkDescriptorPool descriptorPool;

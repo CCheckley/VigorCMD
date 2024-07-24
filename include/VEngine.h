@@ -45,29 +45,22 @@ namespace Vigor
 
 			InitLogicalDevice();
 
-			InitSwapChains();
-
-			InitSwapChainImageViews();
-
-			InitRenderPasses();
-
-			for (auto& window : windows)
-			{
-				window->InitDescriptorSetLayout(vkDevice);
-			}
-
-			InitGraphicsPipelineAndLayoutAndShaderModules();
-
-			InitFrameBuffers();
-
 			// Handle Frame Data
 			for (auto& window : windows)
 			{
+				window->InitSwapChain(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies);
+				window->InitImageViews(vkDevice);
+				window->InitRenderPass(vkDevice, vkPhysicalDevice);
+				window->InitDescriptorSetLayout(vkDevice);
+				window->InitGraphicsPipelineAndLayoutAndShaderModules(vkDevice);
+
 				FrameData& frameData = window->GetFrameData();
 
 				frameData.InitCommandPool(vkDevice, queueFamilyIndicies);
 				frameData.InitCommandPoolTransient(vkDevice, queueFamilyIndicies);
 
+				window->InitDepthBufferResources(vkDevice, vkPhysicalDevice);
+				window->InitFrameBuffers(vkDevice);
 				window->InitTextureImage(vkDevice, vkPhysicalDevice);
 				window->InitTextureImageView(vkDevice, vkPhysicalDevice);
 				window->InitTextureSampler(vkDevice, vkPhysicalDevice);
@@ -450,51 +443,6 @@ namespace Vigor
 			}
 
 			SDL_Log("Initialized with errors: %s", SDL_GetError());
-		}
-
-		void InitSwapChains()
-		{
-			// TODO[CC] make 1 line-r
-			for (auto& window : windows)
-			{
-				window->InitSwapChain(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies);
-			}
-		}
-
-		void InitSwapChainImageViews()
-		{
-			// TODO[CC] make 1 line-r
-			for (auto& window : windows)
-			{
-				window->InitImageViews(vkDevice);
-			}
-		}
-
-		void InitRenderPasses()
-		{
-			// TODO[CC] make 1 line-r
-			for (auto& window : windows)
-			{
-				window->InitRenderPass(vkDevice);
-			}
-		}
-
-		void InitGraphicsPipelineAndLayoutAndShaderModules()
-		{
-			// TODO[CC] make 1 line-r
-			for (auto& window : windows)
-			{
-				window->InitGraphicsPipelineAndLayoutAndShaderModules(vkDevice);
-			}
-		}
-
-		void InitFrameBuffers()
-		{
-			// TODO[CC] make 1 line-r
-			for (auto& window : windows)
-			{
-				window->InitFrameBuffers(vkDevice);
-			}
 		}
 
 		// Shutdown
