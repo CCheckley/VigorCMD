@@ -471,7 +471,7 @@ namespace Vigor
 
 		std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
-		const std::string MODEL_PATH = "./assets/models/viking_room.obj";
+		const std::string MODEL_PATH = "./assets/models/viking_room.3dobj";
 		const std::string TEXTURE_PATH = "./assets/textures/viking_room.png";
 
 #if VULKAN_VALIDATION_LAYERS_ENABLED
