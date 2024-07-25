@@ -76,5 +76,26 @@ namespace Vigor
 
             return attributeDescriptions;
         }
+
+        bool operator==(const Vertex& other) const 
+        {
+            return pos == other.pos && color == other.color && texCoord == other.texCoord;
+        }
+    };
+}
+
+// enable std hashing for vertices
+namespace std
+{
+    // implementation of cppreference recommended approach of combining the fields of
+    //  a struct to create a hash function:
+    template<> struct hash<Vigor::Vertex>
+    {
+        size_t operator()(Vigor::Vertex const& vertex) const
+        {
+            return ((hash<glm::vec3>()(vertex.pos) ^
+                (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
+                (hash<glm::vec2>()(vertex.texCoord) << 1);
+        }
     };
 }

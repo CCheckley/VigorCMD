@@ -31,6 +31,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\stb\stb_image.h" />
+    <ClInclude Include="include\tinyobjloader\tiny_obj_loader.h" />
     <ClInclude Include="include\VDefinitions.h" />
     <ClInclude Include="include\VEngine.h" />
     <ClInclude Include="include\VEngineTypes.h" />
@@ -43,6 +44,7 @@
   <ItemGroup>
     <Image Include="assets\textures\texture.jpg" />
     <Image Include="assets\textures\vigor_logo.png" />
+    <Image Include="assets\textures\viking_room.png" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -138,7 +140,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>E:\repos\VigorCMD\include\stb;C:\VulkanSDK\1.3.268.0\Include;E:\repos\VigorCMD\include\glm1.0.1;E:\repos\VigorCMD\include\SDL2.30.3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>E:\repos\VigorCMD\include\tinyobjloader;E:\repos\VigorCMD\include\stb;C:\VulkanSDK\1.3.268.0\Include;E:\repos\VigorCMD\include\glm1.0.1;E:\repos\VigorCMD\include\SDL2.30.3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>

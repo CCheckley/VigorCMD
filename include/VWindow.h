@@ -3,17 +3,23 @@
 #include <chrono>
 #include <algorithm>
 #include <stdexcept>
+#include <unordered_map>
 
 #include <SDL.h>
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/hash.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
 
 #include "VShaders.h"
 #include "VFilesystem.h"
@@ -1110,10 +1116,10 @@ namespace Vigor
 		/*
 		* Initialize Texture Image
 		*/
-		void InitTextureImage(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		void InitTextureImage(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, const std::string& texturePath)
 		{
 			int texWidth, texHeight, texChannels;
-			stbi_uc* pixels = stbi_load("assets/textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+			stbi_uc* pixels = stbi_load(texturePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 			VkDeviceSize imageSize = texWidth * texHeight * 4;
 
 			if (!pixels)
@@ -1242,6 +1248,64 @@ namespace Vigor
 			if (vkCreateSampler(vkDevice, &createInfoSampler, nullptr, &textureSampler) != VK_SUCCESS)
 			{
 				throw std::runtime_error("Failed to create texture sampler!");
+			}
+		}
+
+		/*
+		* Load model
+		*/
+		void LoadModel(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, const std::string& modelPath)
+		{
+			tinyobj::attrib_t attrib;
+			std::vector<tinyobj::shape_t> shapes;
+			std::vector<tinyobj::material_t> materials;
+
+			std::string warn, err;
+			if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, modelPath.c_str()))
+			{
+				throw std::runtime_error(warn + err);
+			}
+
+			// combined indices/vertex map to filter non-unique verts
+			std::unordered_map<Vertex, uint32_t> uniqueVertices{};
+
+			for (const auto& shape : shapes)
+			{
+				for (const auto& index : shape.mesh.indices)
+				{
+					Vertex vertex{};
+
+					vertex.pos = 
+					{
+						attrib.vertices[3 * index.vertex_index + 0],
+						attrib.vertices[3 * index.vertex_index + 1],
+						attrib.vertices[3 * index.vertex_index + 2]
+					};
+
+					// centered
+					//vertex.texCoord = 
+					//{
+					//	attrib.texcoords[2 * index.texcoord_index + 0],
+					//	attrib.texcoords[2 * index.texcoord_index + 1]
+					//};
+
+					// offset to account for the model
+					vertex.texCoord = 
+					{
+						attrib.texcoords[2 * index.texcoord_index + 0],
+						1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
+					};
+
+					vertex.color = { 1.0f, 1.0f, 1.0f };
+
+					if (uniqueVertices.count(vertex) == 0)
+					{
+						uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
+						vertices.push_back(vertex);
+					}
+
+					indices.push_back(uniqueVertices[vertex]);
+				}
 			}
 		}
 
@@ -1527,7 +1591,7 @@ namespace Vigor
 					VkDeviceSize offsets[] = { 0 };
 
 					vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-					vkCmdBindIndexBuffer(commandBuffer, vkIndexBuffer, 0, VK_INDEX_TYPE_UINT16);
+					vkCmdBindIndexBuffer(commandBuffer, vkIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
 					vkCmdBindDescriptorSets
 					(
@@ -1769,26 +1833,10 @@ namespace Vigor
 		std::vector<VkDynamicState> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
 
 		// TODO[CC] these are here for in-dev, create functionality to collect verts and attr's from "imported" meshes etc. for the scene to display
-		const std::vector<Vertex> vertices = 
-		{
-			// pos					// color			// texCoord
-			{{-0.5f, -0.5f, 0.0f},  {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-			{{0.5f, -0.5f, 0.0f},	{0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-			{{0.5f, 0.5f, 0.0f},	{0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-			{{-0.5f, 0.5f, 0.0f},	{1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
-
-			{{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-			{{0.5f, -0.5f, -0.5f},	{0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-			{{0.5f, 0.5f, -0.5f},	{0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-			{{-0.5f, 0.5f, -0.5f},	{1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}
-		};
+		std::vector<Vertex> vertices;
 
 		// contents of index buffer
-		const std::vector<uint16_t> indices =
-		{
-			0, 1, 2, 2, 3, 0,
-			4, 5, 6, 6, 7, 4
-		};
+		std::vector<uint32_t> indices;
 
 		// TODO[CC] support multiple
 		VkBuffer vkVertexBuffer;

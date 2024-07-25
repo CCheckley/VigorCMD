@@ -61,9 +61,10 @@ namespace Vigor
 
 				window->InitDepthBufferResources(vkDevice, vkPhysicalDevice);
 				window->InitFrameBuffers(vkDevice);
-				window->InitTextureImage(vkDevice, vkPhysicalDevice);
+				window->InitTextureImage(vkDevice, vkPhysicalDevice, TEXTURE_PATH);
 				window->InitTextureImageView(vkDevice, vkPhysicalDevice);
 				window->InitTextureSampler(vkDevice, vkPhysicalDevice);
+				window->LoadModel(vkDevice, vkPhysicalDevice, MODEL_PATH);
 				window->InitVertexBuffer(vkDevice, vkPhysicalDevice); // HANDLE VERTEX BUFFER INIT
 				window->InitIndexBuffer(vkDevice, vkPhysicalDevice); // HANDLE INDEX BUFFER INIT
 				window->InitUniformBuffers(vkDevice, vkPhysicalDevice);
@@ -469,6 +470,9 @@ namespace Vigor
 		SwapChainSupportDetails swapChainSupportDetails;
 
 		std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+
+		const std::string MODEL_PATH = "./assets/models/viking_room.obj";
+		const std::string TEXTURE_PATH = "./assets/textures/viking_room.png";
 
 #if VULKAN_VALIDATION_LAYERS_ENABLED
 		std::vector<const char*> validationLayerNames;
