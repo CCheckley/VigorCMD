@@ -50,16 +50,18 @@ namespace Vigor
 			{
 				window->InitSwapChain(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies);
 				window->InitImageViews(vkDevice);
-				window->InitRenderPass(vkDevice, vkPhysicalDevice);
+				window->InitRenderPass(vkDevice, vkPhysicalDevice, msaaSamples);
 				window->InitDescriptorSetLayout(vkDevice);
-				window->InitGraphicsPipelineAndLayoutAndShaderModules(vkDevice);
+				window->InitGraphicsPipelineAndLayoutAndShaderModules(vkDevice, msaaSamples);
 
 				FrameData& frameData = window->GetFrameData();
 
 				frameData.InitCommandPool(vkDevice, queueFamilyIndicies);
 				frameData.InitCommandPoolTransient(vkDevice, queueFamilyIndicies);
 
-				window->InitDepthBufferResources(vkDevice, vkPhysicalDevice);
+				window->InitColorResources(vkDevice, vkPhysicalDevice, msaaSamples);
+				window->InitDepthBufferResources(vkDevice, vkPhysicalDevice, msaaSamples);
+
 				window->InitFrameBuffers(vkDevice);
 				window->InitTextureImage(vkDevice, vkPhysicalDevice, TEXTURE_PATH);
 				window->InitTextureImageView(vkDevice, vkPhysicalDevice);
@@ -149,12 +151,28 @@ namespace Vigor
 				{
 					if (!window->bIsMinimized)
 					{
-						window->DrawFrame(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies);
+						window->DrawFrame(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies, msaaSamples);
 					}
 				}
 			}
 
 			vkDeviceWaitIdle(vkDevice);
+		}
+
+		static VkSampleCountFlagBits GetMaxUsableSampleCount(VkPhysicalDevice vkPhysicalDevice)
+		{
+			VkPhysicalDeviceProperties physicalDeviceProperties;
+			vkGetPhysicalDeviceProperties(vkPhysicalDevice, &physicalDeviceProperties);
+
+			VkSampleCountFlags counts = physicalDeviceProperties.limits.framebufferColorSampleCounts & physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+			if (counts & VK_SAMPLE_COUNT_64_BIT) { return VK_SAMPLE_COUNT_64_BIT; }
+			if (counts & VK_SAMPLE_COUNT_32_BIT) { return VK_SAMPLE_COUNT_32_BIT; }
+			if (counts & VK_SAMPLE_COUNT_16_BIT) { return VK_SAMPLE_COUNT_16_BIT; }
+			if (counts & VK_SAMPLE_COUNT_8_BIT) { return VK_SAMPLE_COUNT_8_BIT; }
+			if (counts & VK_SAMPLE_COUNT_4_BIT) { return VK_SAMPLE_COUNT_4_BIT; }
+			if (counts & VK_SAMPLE_COUNT_2_BIT) { return VK_SAMPLE_COUNT_2_BIT; }
+
+			return VK_SAMPLE_COUNT_1_BIT;
 		}
 
 	private:
@@ -347,6 +365,7 @@ namespace Vigor
 				}
 
 				vkPhysicalDevice = availablePhysicalDevice;
+				msaaSamples = GetMaxUsableSampleCount(availablePhysicalDevice);
 				break;
 			}
 
@@ -413,6 +432,7 @@ namespace Vigor
 			// VK Device Setup
 			VkPhysicalDeviceFeatures deviceFeatures = {};
 			deviceFeatures.samplerAnisotropy = VK_TRUE; // enable anisotropic filtering support on samplers
+			deviceFeatures.sampleRateShading = VK_TRUE; // enable sample shading feature for the device
 			VkDeviceCreateInfo deviceCreateInfo =
 			{
 				VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,           // sType
@@ -473,6 +493,9 @@ namespace Vigor
 
 		const std::string MODEL_PATH = "./assets/models/viking_room.3dobj";
 		const std::string TEXTURE_PATH = "./assets/textures/viking_room.png";
+
+		// MSAA
+		VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 
 #if VULKAN_VALIDATION_LAYERS_ENABLED
 		std::vector<const char*> validationLayerNames;

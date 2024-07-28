@@ -300,6 +300,7 @@ namespace Vigor
 			uint32_t texWidth,
 			uint32_t texHeight,
 			uint32_t mipLevels,
+			VkSampleCountFlagBits numSamples,
 			VkFormat format,
 			VkImageTiling tiling,
 			VkImageUsageFlags usage,
@@ -321,7 +322,7 @@ namespace Vigor
 			createInfoImage.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 			createInfoImage.usage = usage;
 			createInfoImage.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-			createInfoImage.samples = VK_SAMPLE_COUNT_1_BIT;
+			createInfoImage.samples = numSamples;
 			createInfoImage.flags = 0; // Optional
 			createInfoImage.mipLevels = mipLevels;
 
@@ -821,28 +822,43 @@ namespace Vigor
 		/*
 		* Initialize render pass // TODO[CC] Handle Multiple
 		*/
-		void InitRenderPass(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		void InitRenderPass(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, VkSampleCountFlagBits numSamples)
 		{
 			// COLOR
 			VkAttachmentDescription colorAttachment{};
 			colorAttachment.format = swapChainSurfaceFormat.format;
-			colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT; // no msaa yet so stick with 1
+			colorAttachment.samples = numSamples;
 			colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 			colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 			colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // not doing anything with stencil yet so dont care
 			colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // not doing anything with stencil yet so dont care
 			colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-			colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+			colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
 			// Sub-passes and attachment refs
 			VkAttachmentReference colorAttachmentRef{};
 			colorAttachmentRef.attachment = 0; // specifies which attachment to reference by its index
 			colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+			// this exists as we cannot present multisampled images so we must "resolve" the image first
+			VkAttachmentDescription colorAttachmentResolve{};
+			colorAttachmentResolve.format = swapChainSurfaceFormat.format;
+			colorAttachmentResolve.samples = VK_SAMPLE_COUNT_1_BIT;
+			colorAttachmentResolve.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+			colorAttachmentResolve.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+			colorAttachmentResolve.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+			colorAttachmentResolve.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+			colorAttachmentResolve.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			colorAttachmentResolve.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+			VkAttachmentReference colorAttachmentResolveRef{};
+			colorAttachmentResolveRef.attachment = 2;
+			colorAttachmentResolveRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
 			// DEPTH
 			VkAttachmentDescription depthAttachment{};
 			depthAttachment.format = GetDepthFormat(vkPhysicalDevice);
-			depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+			depthAttachment.samples = numSamples;
 			depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 			depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 			depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -859,6 +875,7 @@ namespace Vigor
 			subpass.colorAttachmentCount = 1;
 			subpass.pColorAttachments = &colorAttachmentRef;
 			subpass.pDepthStencilAttachment = &depthAttachmentRef;
+			subpass.pResolveAttachments = &colorAttachmentResolveRef;
 
 			/* -- NOTE --
 			* The index of the attachment in this array is directly referenced from the fragment shader with "layout(location = 0) out vec4 outColor" in OpenGL
@@ -881,7 +898,7 @@ namespace Vigor
 			subpassDependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
 			subpassDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-			std::array<VkAttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+			std::array<VkAttachmentDescription, 3> attachments = { colorAttachment, depthAttachment, colorAttachmentResolve };
 			VkRenderPassCreateInfo createInfoRenderPass{};
 			createInfoRenderPass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
 			createInfoRenderPass.attachmentCount = static_cast<uint32_t>(attachments.size());
@@ -934,7 +951,7 @@ namespace Vigor
 		/*
 		* Initialize Graphics Pipeline And Layou And Shader Modules
 		*/
-		void InitGraphicsPipelineAndLayoutAndShaderModules(VkDevice vkDevice) // TODO[CC] - split this up
+		void InitGraphicsPipelineAndLayoutAndShaderModules(VkDevice vkDevice, VkSampleCountFlagBits numSamples) // TODO[CC] - split this up
 		{
 			// Shader Module Setup
 			auto VertexShaderCode = Filesystem::Read("./shaders/glsl/vert.spv");
@@ -1051,11 +1068,13 @@ namespace Vigor
 			VkPipelineMultisampleStateCreateInfo createInfoMultisampling{};
 			createInfoMultisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
 			createInfoMultisampling.sampleShadingEnable = VK_FALSE;
-			createInfoMultisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+			createInfoMultisampling.rasterizationSamples = numSamples;
 			createInfoMultisampling.minSampleShading = 1.0f; // Optional
 			createInfoMultisampling.pSampleMask = nullptr; // Optional
 			createInfoMultisampling.alphaToCoverageEnable = VK_FALSE; // Optional
 			createInfoMultisampling.alphaToOneEnable = VK_FALSE; // Optional
+			createInfoMultisampling.sampleShadingEnable = VK_TRUE; // enable sample shading in the pipeline
+			createInfoMultisampling.minSampleShading = .2f; // min fraction for sample shading; closer to one is smoother
 
 			/* Depth and Stencil testing
 			* To configure this VkPipelineDepthStencilStateCreateInfo must be used but is ignored for now
@@ -1175,7 +1194,7 @@ namespace Vigor
 
 			for (size_t i = 0; i < swapChainImageViews.size(); i++)
 			{
-				std::array<VkImageView, 2> attachments = { swapChainImageViews[i], depthImageView };
+				std::array<VkImageView, 3> attachments = { colorImageView, depthImageView, swapChainImageViews[i] };
 				VkFramebufferCreateInfo createInfoFrameBuffer{};
 				createInfoFrameBuffer.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 				createInfoFrameBuffer.renderPass = renderPass;
@@ -1195,9 +1214,42 @@ namespace Vigor
 		}
 
 		/*
+		* Initialize Color Resources
+		*/
+		void InitColorResources(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, VkSampleCountFlagBits numSamples)
+		{
+			VkFormat colorFormat = swapChainSurfaceFormat.format;
+
+			CreateImage
+			(
+				vkDevice,
+				vkPhysicalDevice,
+				swapChainExtent.width,
+				swapChainExtent.height,
+				1,
+				numSamples,
+				colorFormat,
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				colorImage,
+				colorImageMemory
+			);
+
+			colorImageView = CreateImageView
+			(
+				vkDevice,
+				colorImage,
+				colorFormat,
+				VK_IMAGE_ASPECT_COLOR_BIT,
+				1
+			);
+		}
+
+		/*
 		* Initialize Depth Buffer Resources
 		*/
-		void InitDepthBufferResources(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice)
+		void InitDepthBufferResources(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, VkSampleCountFlagBits numSamples)
 		{
 			VkFormat depthFormat = GetDepthFormat(vkPhysicalDevice);
 			CreateImage
@@ -1207,6 +1259,7 @@ namespace Vigor
 				swapChainExtent.width,
 				swapChainExtent.height,
 				1,
+				numSamples,
 				depthFormat,
 				VK_IMAGE_TILING_OPTIMAL,
 				VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -1272,6 +1325,7 @@ namespace Vigor
 				texWidth,
 				texHeight,
 				mipLevels,
+				VK_SAMPLE_COUNT_1_BIT,
 				VK_FORMAT_R8G8B8A8_SRGB,
 				VK_IMAGE_TILING_OPTIMAL,
 				VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -1635,7 +1689,7 @@ namespace Vigor
 		}
 
 		// Runtime
-		void DrawFrame(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, SwapChainSupportDetails swapChainSupportDetails, QueueFamilyIndicies queueFamilyIndicies)
+		void DrawFrame(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, SwapChainSupportDetails swapChainSupportDetails, QueueFamilyIndicies queueFamilyIndicies, VkSampleCountFlagBits numSamples)
 		{
 			vkWaitForFences(vkDevice, 1, &frameData.inFlightFences[currentFrame], VK_TRUE, UINT64_MAX); // wait for previous frame to finish
 
@@ -1645,7 +1699,7 @@ namespace Vigor
 
 			if (aquireNextImageRes == VK_ERROR_OUT_OF_DATE_KHR)
 			{
-				ReInitSwapChain(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies);
+				ReInitSwapChain(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies, numSamples);
 				return;
 			}
 			else if (aquireNextImageRes != VK_SUCCESS)
@@ -1786,7 +1840,7 @@ namespace Vigor
 			if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR || bFrameBufferResized)
 			{
 				bFrameBufferResized = false;
-				ReInitSwapChain(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies);
+				ReInitSwapChain(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies, numSamples);
 			}
 			else if (presentResult != VK_SUCCESS)
 			{
@@ -1868,6 +1922,11 @@ namespace Vigor
 
 		void ShutdownSwapChain(VkDevice vkDevice)
 		{
+			// multisampling color cleanup
+			vkDestroyImageView(vkDevice, colorImageView, nullptr);
+			vkDestroyImage(vkDevice, colorImage, nullptr);
+			vkFreeMemory(vkDevice, colorImageMemory, nullptr);
+
 			// depth buffer cleanup
 			vkDestroyImageView(vkDevice, depthImageView, nullptr);
 			vkDestroyImage(vkDevice, depthImage, nullptr);
@@ -1890,7 +1949,7 @@ namespace Vigor
 		/*
 		* Re-initialize swapchains for events that invalidate them like window resize
 		*/
-		void ReInitSwapChain(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, SwapChainSupportDetails swapChainSupportDetails, QueueFamilyIndicies queueFamilyIndicies)
+		void ReInitSwapChain(VkDevice vkDevice, VkPhysicalDevice vkPhysicalDevice, SwapChainSupportDetails swapChainSupportDetails, QueueFamilyIndicies queueFamilyIndicies, VkSampleCountFlagBits numSamples)
 		{
 			/* !! NOTE !!
 			* we don't recreate the renderpass here for simplicity.
@@ -1906,7 +1965,10 @@ namespace Vigor
 
 			InitSwapChain(vkDevice, vkPhysicalDevice, swapChainSupportDetails, queueFamilyIndicies);
 			InitImageViews(vkDevice);
-			InitDepthBufferResources(vkDevice, vkPhysicalDevice);
+
+			InitColorResources(vkDevice, vkPhysicalDevice, numSamples);
+			InitDepthBufferResources(vkDevice, vkPhysicalDevice, numSamples);
+
 			InitFrameBuffers(vkDevice);
 		}
 
@@ -1998,5 +2060,10 @@ namespace Vigor
 		VkDescriptorPool descriptorPool;
 		std::vector<VkDescriptorSet> descriptorSets;
 		VkDescriptorSetLayout descriptorSetLayout;
+
+		// multisampling
+		VkImage colorImage;
+		VkDeviceMemory colorImageMemory;
+		VkImageView colorImageView;
 	};
 }
